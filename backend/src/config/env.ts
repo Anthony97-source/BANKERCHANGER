@@ -41,7 +41,7 @@ const envSchema = z.object({
   ADMIN_PUBLIC_KEY: z.string().optional(),
   TREASURY_CONTRACT_ADDRESS: z.string().optional(),
   ORACLE_API_KEY: z.string().optional(),
-  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).default('info'),
   ENABLE_SWAGGER: z.coerce.boolean().default(false),
   GENESIS_LEDGER: z.coerce.number().int().positive().default(100000),
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
@@ -76,13 +76,15 @@ export function validateEnv(): Env {
       const path = issue.path.join('.');
       return `${path}: ${issue.message}`;
     });
-    logger.error('Environment validation failed:');
-    errors.forEach(err => logger.error(`  - ${err}`));
+    logger.error({ errors }, 'Environment validation failed');
     throw new ConfigurationError(`Environment validation failed: ${errors.join('; ')}`);
   }
 
   validatedEnv = result.data;
-  logger.info('Environment variables validated successfully');
+  logger.info(
+    { logLevel: validatedEnv.LOG_LEVEL, nodeEnv: validatedEnv.NODE_ENV },
+    'Environment variables validated successfully',
+  );
   return validatedEnv;
 }
 

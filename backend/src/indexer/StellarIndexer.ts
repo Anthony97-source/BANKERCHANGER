@@ -12,6 +12,9 @@ import { subscribeToContractEvents, fetchHistoricalEvents } from '../services/St
 import { cacheDeletePattern } from '../services/cache.service';
 import { broadcastMarketResolved } from '../websocket/realtime';
 import { enqueueWebhookEvent } from '../services/webhookDelivery.service';
+import { logger } from '../config/logger';
+
+const log = logger.child({ module: 'StellarIndexer' });
 
 // Raw event shape returned by Stellar RPC / Horizon
 export interface RawStellarEvent {
@@ -39,7 +42,10 @@ function publishActivity(event: ActivityEvent): void {
     const feed = tryGetActivityFeed() || getActivityFeedIfInitialized();
     feed?.publish(event);
   } catch (err) {
-    console.error('[Indexer] Failed to publish activity event:', err instanceof Error ? err.message : err);
+    log.error(
+      { err: err instanceof Error ? err.message : String(err), marketId: event.marketId },
+      'Failed to publish activity event',
+    );
   }
 }
 
@@ -108,17 +114,23 @@ export async function startIndexer(): Promise<void> {
   const pollInterval = Number(process.env.POLL_INTERVAL_MS ?? 5000);
   let lastProcessed = await getLastProcessedLedger();
 
-  console.log(`[Indexer] Starting from ledger ${lastProcessed}`);
+  log.info({ lastProcessed }, 'Starting indexer');
 
   const checkpoint = await loadCheckpoint();
   if (checkpoint && checkpoint > lastProcessed) {
-    console.log(`[Indexer] Backfilling from ledger ${lastProcessed + 1} to ${checkpoint}`);
+    log.info(
+      { fromLedger: lastProcessed + 1, toLedger: checkpoint },
+      'Backfilling from checkpoint',
+    );
     await backfillFromLedger(lastProcessed + 1, checkpoint);
     lastProcessed = checkpoint;
   }
 
-  console.log(`[Indexer] Starting real-time subscription from ledger ${lastProcessed}`);
-  console.log(`[Indexer] Subscribing to contracts: factory=${FACTORY_CONTRACT}, treasury=${TREASURY_CONTRACT || 'not configured'}`);
+  log.info({ lastProcessed }, 'Starting real-time subscription');
+  log.info(
+    { factory: FACTORY_CONTRACT, treasury: TREASURY_CONTRACT || 'not configured' },
+    'Subscribing to contracts',
+  );
   
   const handleRealTimeEvent = async (event: unknown) => {
     try {
@@ -134,7 +146,7 @@ export async function startIndexer(): Promise<void> {
       };
       await processEvent(rawEvent);
     } catch (err) {
-      console.error('[Indexer] Error processing real-time event:', err);
+      log.error({ err }, 'Error processing real-time event');
     }
   };
 
@@ -145,7 +157,7 @@ export async function startIndexer(): Promise<void> {
   }
 
   process.on('SIGTERM', () => {
-    console.log('[Indexer] SIGTERM received, shutting down gracefully');
+    log.info('SIGTERM received, shutting down gracefully');
     indexerHealth.isRunning = false;
     unsubscribeFactory();
     unsubscribeTreasury();
@@ -153,7 +165,7 @@ export async function startIndexer(): Promise<void> {
   });
 
   process.on('SIGINT', () => {
-    console.log('[Indexer] SIGINT received, shutting down gracefully');
+    log.info('SIGINT received, shutting down gracefully');
     indexerHealth.isRunning = false;
     unsubscribeFactory();
     unsubscribeTreasury();
@@ -182,9 +194,14 @@ export async function startIndexer(): Promise<void> {
       indexerHealth.lastErrorAt = new Date().toISOString();
 
       const backoffMs = calculateBackoff(indexerHealth.consecutiveFailures);
-      console.error(
-        `[Indexer] Poll failed (consecutive failures: ${indexerHealth.consecutiveFailures}), retrying in ${backoffMs}ms:`,
-        err,
+      log.error(
+        {
+          err,
+          consecutiveFailures: indexerHealth.consecutiveFailures,
+          backoffMs,
+          lastProcessed,
+        },
+        'Poll failed, retrying after backoff',
       );
       await sleep(backoffMs);
     }
@@ -196,9 +213,9 @@ export async function pollOnce(lastProcessed: number): Promise<number> {
   const latestLedger = latestLedgerResponse.sequence;
 
   if (latestLedger < lastProcessed) {
-    console.warn(
-      `[Indexer] Re-org detected: latest ledger ${latestLedger} is behind ` +
-      `last processed ${lastProcessed}. Resuming from tip without replaying backward.`,
+    log.warn(
+      { latestLedger, lastProcessed },
+      'Re-org detected: latest ledger is behind last processed, resuming from tip without replaying backward',
     );
     await saveCheckpoint(latestLedger);
     return latestLedger;
@@ -209,12 +226,13 @@ export async function pollOnce(lastProcessed: number): Promise<number> {
     const ranges = await getProcessedRanges();
     const missing = findMissingRanges(fromLedger + 1, latestLedger, ranges);
     for (const range of missing) {
-      console.log(`[Indexer] Backfilling missing ledgers ${range.start}–${range.end}`);
+      log.info({ fromLedger: range.start, toLedger: range.end }, 'Backfilling missing ledgers');
       await backfillMissingLedgers(range.start, range.end, 100);
       lastProcessed = Math.max(lastProcessed, range.end);
     }
   } catch (err) {
     // Fallback if table not ready
+    log.debug({ err }, 'Processed-range tracking unavailable, skipping gap detection');
   }
 
   for (let seq = lastProcessed + 1; seq <= latestLedger; seq++) {
@@ -222,7 +240,7 @@ export async function pollOnce(lastProcessed: number): Promise<number> {
       await processLedger(seq);
     } catch (err) {
       if (isLedgerRangeError(err)) {
-        console.warn(`[Indexer] Ledger ${seq} unavailable (pruned/out of range), skipping`, err);
+        log.warn({ err, ledgerSequence: seq }, 'Ledger unavailable (pruned/out of range), skipping');
       } else {
         throw err;
       }
@@ -254,7 +272,7 @@ export async function backfillMissingLedgers(
         await processLedger(seq);
       } catch (err) {
         if (isLedgerRangeError(err)) {
-          console.warn(`[Indexer] Ledger ${seq} unavailable during backfill, skipping`, err);
+          log.warn({ err, ledgerSequence: seq }, 'Ledger unavailable during backfill, skipping');
         } else {
           throw err;
         }
@@ -487,13 +505,26 @@ export async function processEvent(event: RawStellarEvent): Promise<void> {
       await handler(event);
       broadcastIndexedEvent(event);
     } else {
-      console.warn(
-        `[Indexer] Unknown event type "${event.event_type}" on contract ${event.contract_address} ` +
-        `(tx: ${event.tx_hash}, ledger: ${event.ledger_sequence}) — skipping`,
+      log.warn(
+        {
+          eventType: event.event_type,
+          contractAddress: event.contract_address,
+          txHash: event.tx_hash,
+          ledgerSequence: event.ledger_sequence,
+        },
+        'Unknown event type, skipping',
       );
     }
   } catch (err) {
-    console.error(`Error processing event ${event.tx_hash}:`, err);
+    log.error(
+      {
+        err,
+        eventType: event.event_type,
+        txHash: event.tx_hash,
+        ledgerSequence: event.ledger_sequence,
+      },
+      'Error processing event',
+    );
   }
 }
 
@@ -581,9 +612,15 @@ export async function handleMarketCreated(event: RawStellarEvent): Promise<void>
       ],
     );
 
-    console.log(`[Indexer] Market created: ${marketData.market_id}`);
+    log.info(
+      { marketId: marketData.market_id, ledgerSequence: event.ledger_sequence, txHash: event.tx_hash },
+      'Market created',
+    );
   } catch (err) {
-    console.error(`[Indexer] Error handling MarketCreated event:`, err);
+    log.error(
+      { err, ledgerSequence: event.ledger_sequence, txHash: event.tx_hash },
+      'Error handling MarketCreated event',
+    );
     throw err;
   }
 }
@@ -851,9 +888,9 @@ export async function backfillLedgerRange(
   batch_size: number,
 ): Promise<void> {
   const total = to_ledger - from_ledger + 1;
-  console.log(
-    `[Backfill] Starting — ledgers ${from_ledger}–${to_ledger} ` +
-    `(${total} ledgers, batch_size=${batch_size})`,
+  log.info(
+    { fromLedger: from_ledger, toLedger: to_ledger, total, batchSize: batch_size },
+    'Backfill starting',
   );
 
   let processed = 0;
@@ -865,18 +902,18 @@ export async function backfillLedgerRange(
       try {
         await processLedger(seq);
       } catch (err) {
-        console.error(
-          `[Backfill] Failed to process ledger ${seq}, skipping:`,
-          err instanceof Error ? err.message : err,
+        log.error(
+          { err: err instanceof Error ? err.message : String(err), ledgerSequence: seq },
+          'Failed to process ledger during backfill, skipping',
         );
       }
       processed++;
 
       if (processed % 1_000 === 0) {
         const pct = ((processed / total) * 100).toFixed(1);
-        console.log(
-          `[Backfill] Progress: ${processed}/${total} ledgers processed ` +
-          `(${pct}%, current ledger: ${seq})`,
+        log.info(
+          { processed, total, pct, ledgerSequence: seq },
+          'Backfill progress',
         );
       }
     }
@@ -884,7 +921,7 @@ export async function backfillLedgerRange(
     await recordProcessedRange(batchStart, batchEnd);
   }
 
-  console.log(`[Backfill] Complete — ${processed} ledgers processed.`);
+  log.info({ processed }, 'Backfill complete');
 }
 
 export async function loadCheckpoint(): Promise<number | null> {
@@ -895,10 +932,10 @@ export async function loadCheckpoint(): Promise<number | null> {
 }
 
 export async function backfillFromLedger(fromLedger: number, toLedger?: number): Promise<void> {
-  console.log(`[Indexer] Backfilling from ledger ${fromLedger}${toLedger ? ` to ${toLedger}` : ''}`);
-  
+  log.info({ fromLedger, toLedger }, 'Backfilling from ledger');
+
   const events = await fetchHistoricalEvents(fromLedger, toLedger);
-  console.log(`[Indexer] Fetched ${events.length} historical events`);
+  log.info({ fromLedger, toLedger, eventCount: events.length }, 'Fetched historical events');
 
   for (const event of events) {
     await processEvent(event);

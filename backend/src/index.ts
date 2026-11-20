@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import express from "express";
 import pinoHttp from "pino-http";
 import { validateEnv } from "./config/env";
@@ -13,6 +14,7 @@ import { requireAdmin } from "./middleware/admin.middleware";
 import { initSentry, applySentryRequestHandler } from "./middleware/sentry.middleware";
 import { rateLimit } from "./middleware/rate-limit.middleware";
 import { requestLogging } from "./middleware/request-logging.middleware";
+import { requestContext } from "./middleware/request-context.middleware";
 import { AppError } from "./utils/AppError";
 import { logger } from "./utils/logger";
 import { pool } from "./config/db";
@@ -23,7 +25,6 @@ import marketRouter from "./routes/market.routes";
 import governanceRouter from "./routes/governance.routes";
 import usersRouter from "./routes/users.routes";
 import adminRouter from "./routes/admin.routes";
-import operationsRouter from "./routes/operations.routes";
 import operationsRouter from "./routes/operations.routes";
 
 import disputesRouter from "./routes/disputes.routes";
@@ -52,8 +53,23 @@ const app = express();
 // CORS configuration - must be before other middleware
 app.use(createCorsMiddleware());
 
-// Middleware
-app.use(pinoHttp({ logger }));
+// Logging middleware — must run first so every request (and every log line
+// emitted downstream) carries a request_id for tracing.
+app.use(
+  pinoHttp({
+    logger,
+    genReqId: (req, res) => {
+      const existing = req.headers["x-request-id"];
+      const id =
+        (typeof existing === "string" && existing) ||
+        (Array.isArray(existing) && existing[0]) ||
+        randomUUID();
+      res.setHeader("x-request-id", id);
+      return id;
+    },
+  }),
+);
+app.use(requestContext);
 app.use(express.json());
 app.use(requestLogging);
 
@@ -164,9 +180,9 @@ app.use(errorMiddleware);
 
 const PORT = env.PORT;
 const server = app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
+  logger.info({ port: PORT }, "Server running");
   if (env.NODE_ENV === 'development' || env.ENABLE_SWAGGER) {
-    logger.info(`Swagger UI available at http://localhost:${PORT}/api/docs`);
+    logger.info({ port: PORT }, "Swagger UI available");
   }
   startAutoResolutionCron();
   startAutoLockCron();
@@ -191,7 +207,7 @@ const server = app.listen(PORT, () => {
     logger.error({ err }, "Startup health check FAILED — redis unreachable");
     results.push("redis: FAILED");
   }
-  logger.info(`Startup health check — ${results.join(", ")}`);
+  logger.info({ results }, "Startup health check complete");
 })();
 
 initActivityFeed(server);

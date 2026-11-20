@@ -12,8 +12,14 @@ This runbook provides step-by-step procedures for responding to common productio
 5. [Contract Pause Events](#contract-pause-events)
 6. [High Dispute Volumes](#high-dispute-volumes)
 7. [RPC Node Outages](#rpc-node-outages)
-8. [Load Testing Guidelines](#load-testing-guidelines)
-9. [Quick Reference: CLI Commands](#quick-reference-cli-commands)
+8. [Indexer Lag](#indexer-lag)
+9. [High Error Rate](#high-error-rate)
+10. [Database Connection Pool Exhausted](#database-connection-pool-exhausted)
+11. [API Slowdown](#api-slowdown)
+12. [Log Aggregation & Request Tracing](#log-aggregation--request-tracing)
+13. [Escalation & On-Call Path](#escalation--on-call-path)
+14. [Load Testing Guidelines](#load-testing-guidelines)
+15. [Quick Reference: CLI Commands](#quick-reference-cli-commands)
 
 ---
 
@@ -1075,6 +1081,301 @@ curl -s http://localhost:8000/health | jq '{
 - **Level 1 (0-5 min):** Check RPC health, verify connectivity
 - **Level 2 (5-30 min):** Restart services, consider failover
 - **Level 3 (>30 min):** Executive notification, activate disaster recovery plan
+
+---
+
+## Indexer Lag
+
+### Observable Symptoms
+
+- Indexer health check returns non-ready (`503`) or reports ledger lag above threshold
+- `GET /healthz/ready` on the indexer reports `ledgerLag` growing over time
+- Markets/bets created on-chain do not appear in the API within the expected window
+- Logs show repeated `getLatestLedger` / `getEvents` errors or RPC timeouts
+- Monitoring alert for `indexer_ledger_lag > N` (default threshold: 30 ledgers)
+
+### Diagnostic Procedures
+
+**Step 1: Check indexer readiness and ledger lag**
+
+```bash
+# Readiness probe (returns 200 when caught up, 503 when lagging)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3002/healthz/ready
+
+# Full readiness payload, including current vs. chain ledger
+curl -s http://localhost:3002/healthz/ready | jq '{status, ledgerLag, lastIndexedLedger, latestChainLedger}'
+```
+
+**Step 2: Verify RPC connectivity and chain head**
+
+```bash
+# Confirm the RPC endpoint is reachable and returning a ledger
+curl -s -X POST "$STELLAR_RPC_URL" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger","params":[]}' | jq '.result.sequence'
+
+# Compare with the indexer's last indexed ledger
+curl -s http://localhost:3002/healthz/ready | jq '.lastIndexedLedger'
+```
+
+**Step 3: Inspect indexer logs**
+
+```bash
+# Recent indexer logs
+journalctl -u bankerchanger-indexer -n 200 --no-pager
+
+# Filter for RPC / event-fetch errors
+journalctl -u bankerchanger-indexer -n 500 --no-pager | grep -Ei "rpc|getEvents|timeout|error"
+```
+
+### Resolution Steps
+
+1. **If RPC is degraded:** follow [RPC Node Outages](#rpc-node-outages) first — the indexer cannot catch up without a healthy RPC.
+2. **Restart the indexer** to clear a stuck cursor or wedged event loop:
+   ```bash
+   systemctl restart bankerchanger-indexer
+   # Watch it catch up
+   watch -n 5 "curl -s http://localhost:3002/healthz/ready | jq '{status, ledgerLag}'"
+   ```
+3. **If lag persists after restart:** check disk space (`df -h`), DB write latency, and whether the indexer is being throttled by the connection pool (see [Database Connection Pool Exhausted](#database-connection-pool-exhausted)).
+4. **If the cursor is corrupted:** restore the last known-good cursor from the DB and restart (see indexer README for the cursor table).
+
+### Escalation Protocol
+
+- **Level 1 (lag < 100 ledgers):** restart indexer, verify RPC health
+- **Level 2 (lag > 100 ledgers or > 15 min):** notify on-call backend engineer, check RPC provider status
+- **Level 3 (indexer down > 30 min):** page platform lead; post user-facing status update if data is visibly stale
+
+---
+
+## High Error Rate
+
+### Observable Symptoms
+
+- 5xx rate on `/api/*` exceeds threshold (alert at >1% over 5 min)
+- Users report failed bets, claims, or market loads
+- Logs show spikes in `error` level entries or unhandled exceptions
+
+### Diagnostic Procedures
+
+**Step 1: Confirm the error rate**
+
+```bash
+# Quick health check
+curl -s http://localhost:3001/api/health | jq '.'
+
+# Detailed health (admin token required) — includes dependency status
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:3001/health/detailed | jq '.'
+```
+
+**Step 2: Find the failing requests by `request_id`**
+
+Every request is logged with a `request_id` (via `pino-http`). Use it to trace a single request across services.
+
+```bash
+# Loki / LogQL: all log lines for a specific request
+logcli query '{app="bankerchanger-backend"} | json | request_id="<REQUEST_ID>"'
+
+# Loki: error-level lines in the last 15 minutes
+logcli query '{app="bankerchanger-backend"} | json | level="error"' --since=15m
+
+# Kibana / Elasticsearch: search by request_id
+#   index: bankerchanger-*   query: request_id:"<REQUEST_ID>"
+```
+
+**Step 3: Identify the failing endpoint**
+
+```bash
+# Aggregate recent errors by route
+logcli query '{app="bankerchanger-backend"} | json | level="error"' --since=30m \
+  | jq -r '.route' | sort | uniq -c | sort -rn | head
+```
+
+### Resolution Steps
+
+1. **If a single endpoint is failing:** inspect the stack trace for that `request_id`, fix or roll back the offending deploy.
+2. **If load-related:** scale the service horizontally:
+   ```bash
+   # Docker Compose
+   docker compose up -d --scale backend=3
+
+   # Kubernetes
+   kubectl scale deployment bankerchanger-backend --replicas=4
+   ```
+3. **If a dependency is down:** follow the relevant section (RPC, DB pool, Oracle).
+4. **If errors are from a bad deploy:** roll back to the previous image and confirm error rate drops.
+
+### Escalation Protocol
+
+- **Level 1 (<5% errors):** investigate logs, identify endpoint
+- **Level 2 (5–20% errors or >10 min):** notify on-call backend engineer, consider rollback
+- **Level 3 (>20% errors or user-facing outage):** page platform lead, post status update
+
+---
+
+## Database Connection Pool Exhausted
+
+### Observable Symptoms
+
+- Requests hang or time out with `timeout exceeded when trying to connect`
+- Logs show `pool` errors or `remaining connection slots are reserved`
+- `/health/detailed` reports `pool.waitingCount > 0` sustained
+- API latency climbs sharply under moderate load
+
+### Diagnostic Procedures
+
+**Step 1: Inspect the pool via the detailed health endpoint**
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:3001/health/detailed \
+  | jq '.dependencies.database.pool'
+# Expect: { totalCount, idleCount, waitingCount }
+# Healthy: waitingCount == 0 and idleCount > 0
+```
+
+**Step 2: Check Postgres connection usage**
+
+```bash
+# Total connections vs. max_connections
+psql "$DATABASE_URL" -c "SELECT count(*) AS used, current_setting('max_connections')::int AS max FROM pg_stat_activity;"
+
+# Connections grouped by state and application
+psql "$DATABASE_URL" -c "SELECT state, application_name, count(*) FROM pg_stat_activity GROUP BY 1,2 ORDER BY 3 DESC;"
+
+# Long-running / idle-in-transaction queries holding connections
+psql "$DATABASE_URL" -c "SELECT pid, state, now()-state_change AS age, left(query,80) FROM pg_stat_activity WHERE state <> 'idle' ORDER BY age DESC LIMIT 20;"
+```
+
+**Step 3: Correlate with request logs**
+
+```bash
+logcli query '{app="bankerchanger-backend"} | json | level="error" |~ "pool|timeout"' --since=15m
+```
+
+### Resolution Steps
+
+1. **Terminate idle-in-transaction sessions** that are leaking connections:
+   ```bash
+   psql "$DATABASE_URL" -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND now()-state_change > interval '5 minutes';"
+   ```
+2. **Tune the pool size** via `DB_POOL_MAX` (and `DB_POOL_IDLE_TIMEOUT_MS`). Keep `replicas × DB_POOL_MAX` below Postgres `max_connections` minus headroom:
+   ```bash
+   # Example: 4 replicas × 20 = 80, leaving headroom under max_connections=100
+   export DB_POOL_MAX=20
+   systemctl restart bankerchanger-backend
+   ```
+3. **Scale horizontally** if the workload is genuinely concurrent (see High Error Rate scaling commands).
+4. **Add a PgBouncer** in front of Postgres if the connection count is structurally too high.
+
+### Escalation Protocol
+
+- **Level 1 (waitingCount > 0 briefly):** inspect slow queries, terminate leaked sessions
+- **Level 2 (sustained exhaustion):** raise `DB_POOL_MAX` within `max_connections` budget, notify on-call
+- **Level 3 (Postgres refusing connections):** page DBA/platform lead, consider read replica offload
+
+---
+
+## API Slowdown
+
+### Observable Symptoms
+
+- p95/p99 latency on `/api/*` exceeds SLO (e.g., p95 > 500ms)
+- Users report slow page loads or timeouts
+- `pino-http` response-time logs show elevated `responseTime`
+
+### Diagnostic Procedures
+
+**Step 1: Check health and dependency latency**
+
+```bash
+curl -s http://localhost:3001/api/health | jq '.'
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:3001/health/detailed | jq '.dependencies'
+```
+
+**Step 2: Find the slowest routes from logs**
+
+`pino-http` logs each request with `responseTime` (ms) and `request_id`:
+
+```bash
+# Loki: slowest requests in the last 15 minutes
+logcli query '{app="bankerchanger-backend"} | json | responseTime > 500' --since=15m \
+  | jq -r '"\(.responseTime)ms \(.method) \(.url) req=\(.request_id)"' | sort -rn | head -20
+
+# Kibana: filter responseTime > 500, sort descending
+#   index: bankerchanger-*   query: responseTime:>500
+```
+
+**Step 3: Check DB and Redis latency**
+
+```bash
+# Slow queries
+psql "$DATABASE_URL" -c "SELECT pid, now()-query_start AS dur, left(query,80) FROM pg_stat_activity WHERE state='active' ORDER BY dur DESC LIMIT 10;"
+
+# Redis latency
+redis-cli --latency
+```
+
+### Resolution Steps
+
+1. **If a specific route is slow:** inspect its query plan (`EXPLAIN ANALYZE`), add an index, or cache the result.
+2. **If DB-bound:** check the connection pool (see [Database Connection Pool Exhausted](#database-connection-pool-exhausted)).
+3. **If CPU-bound:** scale horizontally (see High Error Rate scaling commands) and check event-loop delay.
+4. **If external (RPC/Oracle):** follow the relevant section.
+
+### Escalation Protocol
+
+- **Level 1 (p95 500ms–1s):** profile slow routes, check DB/Redis
+- **Level 2 (p95 > 1s or sustained):** notify on-call backend engineer, scale service
+- **Level 3 (timeouts / user-facing outage):** page platform lead, post status update
+
+---
+
+## Log Aggregation & Request Tracing
+
+### Overview
+
+All services emit structured JSON logs via `pino`. Logs are shipped from containers to a centralized system (Loki or the ELK stack) and indexed by `request_id` so a single request can be traced end-to-end.
+
+### Shipping & Parsing
+
+- **Loki (recommended):** run Promtail (or the Grafana Agent) as a sidecar/DaemonSet; it tails container stdout, parses the JSON, and labels by `app`, `level`, and `request_id`.
+- **ELK:** run Filebeat as a DaemonSet; it ships container logs to Logstash/Elasticsearch with a JSON codec. The `bankerchanger-*` index template maps `request_id` as a `keyword` for exact-match search.
+- **Parsing:** logs are already JSON — configure the shipper with a JSON parser so fields (`level`, `request_id`, `responseTime`, `route`) become queryable.
+
+### Searching by `request_id`
+
+```bash
+# Loki / LogQL
+logcli query '{app="bankerchanger-backend"} | json | request_id="<REQUEST_ID>"'
+
+# Elasticsearch / Kibana
+#   index: bankerchanger-*   query: request_id:"<REQUEST_ID>"
+```
+
+### Retention Policy
+
+- **Loki:** configure `limits_config.retention_period` (e.g., `30d`) and per-stream `retention_stream` overrides; enable the compactor with `retention_enabled: true`.
+- **Elasticsearch:** use ILM — hot (7d) → warm (30d) → delete (90d). Set `index.lifecycle.name` on the `bankerchanger-*` template.
+- Keep error-level logs longer than debug/info; never retain secrets or auth headers.
+
+---
+
+## Escalation & On-Call Path
+
+| Severity | Definition | Response | Who |
+|----------|-----------|----------|-----|
+| **SEV-1** | Full outage, funds at risk, data loss | Page immediately | On-call engineer → Platform lead → Exec |
+| **SEV-2** | Major degradation (errors >20%, indexer down >30 min) | Page within 15 min | On-call engineer → Platform lead |
+| **SEV-3** | Partial degradation (elevated latency/errors) | Notify in incident channel | On-call engineer |
+| **SEV-4** | Minor / cosmetic | Next business day | Owning team |
+
+**On-call path:**
+1. **Primary on-call engineer** — acknowledges page, opens incident channel (`#incident-<date>`), starts triage.
+2. **Secondary / backend lead** — engaged if unresolved in 15 min (SEV-1/2) or 30 min (SEV-3).
+3. **Platform lead** — engaged for SEV-1/2; owns user communications and go/no-go on rollback/pause.
+4. **Executive** — notified for SEV-1 or any incident >1 hour.
+
+**During an incident:** assign an Incident Commander, keep a running timeline in the incident channel, and capture `request_id`s and log queries used. **After:** write a post-mortem within 48 hours for SEV-1/2.
 
 ---
 
