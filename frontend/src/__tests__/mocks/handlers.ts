@@ -114,6 +114,74 @@ export const handlers = [
 ];
 
 /**
+ * Handler for a successful GET /api/markets response (API client integration tests)
+ */
+export const marketsSuccessHandler = http.get(
+  `${API_BASE}/api/markets`,
+  () => {
+    const response: MarketListResponse = {
+      markets: mockMarkets,
+      total: mockMarkets.length,
+      page: 1,
+      limit: 20,
+    };
+
+    return HttpResponse.json(response);
+  }
+);
+
+/**
+ * Handler returning a 4xx (400) error response
+ */
+export const marketsClientErrorHandler = http.get(
+  `${API_BASE}/api/markets`,
+  () => {
+    return HttpResponse.json(
+      { error: 'Bad request', message: 'Invalid query parameters' },
+      { status: 400 }
+    );
+  }
+);
+
+/**
+ * Creates a handler that fails with 503 for the first `failures` requests,
+ * then succeeds. Used to exercise retry logic.
+ */
+export function createMarketsRetryHandler(failures = 2) {
+  let attempts = 0;
+
+  return http.get(`${API_BASE}/api/markets`, () => {
+    attempts += 1;
+
+    if (attempts <= failures) {
+      return HttpResponse.json(
+        { error: 'Service unavailable' },
+        { status: 503 }
+      );
+    }
+
+    const response: MarketListResponse = {
+      markets: mockMarkets,
+      total: mockMarkets.length,
+      page: 1,
+      limit: 20,
+    };
+
+    return HttpResponse.json(response);
+  });
+}
+
+/**
+ * Handler that simulates a network error (fetch rejection)
+ */
+export const marketsNetworkErrorHandler = http.get(
+  `${API_BASE}/api/markets`,
+  () => {
+    return HttpResponse.error();
+  }
+);
+
+/**
  * MSW server for Node (used in Jest tests)
  */
 export const server = setupServer(...handlers);
