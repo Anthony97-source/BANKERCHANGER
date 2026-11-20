@@ -114,3 +114,223 @@ BANKERCHANGER uses [Pino](https://getpino.io/) for structured JSON logging.
 | `indexer_db_pool_size` | Gauge | — | Total PostgreSQL connections in indexer connection pool |
 | `indexer_db_pool_idle` | Gauge | — | Idle PostgreSQL connections in indexer connection pool |
 
+## Grafana Dashboard
+
+A ready-to-import Grafana dashboard is provided below. It uses the `bankerchanger` Prometheus job (see [Prometheus Scrape Configuration](#prometheus-scrape-configuration)) and the metrics documented above.
+
+**Panels:**
+
+- Request rate — `sum(rate(http_requests_total{job="bankerchanger"}[5m]))`
+- Latency p50/p95/p99 — `histogram_quantile(0.5|0.95|0.99, sum(rate(http_request_duration_seconds_bucket{job="bankerchanger"}[5m])) by (le))`
+- Error rate — `sum(rate(http_requests_total{job="bankerchanger",status_code=~"5.."}[5m])) / sum(rate(http_requests_total{job="bankerchanger"}[5m]))`
+- Cache hit rate — `rate(cache_hits_total{job="bankerchanger"}[5m]) / (rate(cache_hits_total{job="bankerchanger"}[5m]) + rate(cache_misses_total{job="bankerchanger"}[5m]))`
+- DB connections — `indexer_db_pool_size{job="bankerchanger"}` and `indexer_db_pool_idle{job="bankerchanger"}`
+- Indexer lag — `indexer_ledger_lag{job="bankerchanger"}`
+
+### Import Instructions
+
+1. In Grafana, go to **Dashboards → New → Import**.
+2. Paste the JSON below (or upload it as a file) and click **Load**.
+3. Select your Prometheus data source (the one scraping the `bankerchanger` job) as the data source for all panels.
+4. Click **Import**.
+
+### Dashboard JSON
+
+```json
+{
+  "title": "BANKERCHANGER Platform Monitoring",
+  "uid": "bankerchanger-platform",
+  "tags": ["bankerchanger", "prometheus"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request Rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{job=\"bankerchanger\"}[5m]))",
+          "legendFormat": "requests/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Latency p50 / p95 / p99",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum(rate(http_request_duration_seconds_bucket{job=\"bankerchanger\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"bankerchanger\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"bankerchanger\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Error Rate (5xx)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{job=\"bankerchanger\",status_code=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"bankerchanger\"}[5m]))",
+          "legendFormat": "5xx rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Cache Hit Rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(cache_hits_total{job=\"bankerchanger\"}[5m]) / (rate(cache_hits_total{job=\"bankerchanger\"}[5m]) + rate(cache_misses_total{job=\"bankerchanger\"}[5m]))",
+          "legendFormat": "hit rate"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "DB Connections (Indexer Pool)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "indexer_db_pool_size{job=\"bankerchanger\"}",
+          "legendFormat": "total"
+        },
+        {
+          "refId": "B",
+          "expr": "indexer_db_pool_idle{job=\"bankerchanger\"}",
+          "legendFormat": "idle"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Indexer Ledger Lag",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "indexer_ledger_lag{job=\"bankerchanger\"}",
+          "legendFormat": "ledger lag"
+        }
+      ]
+    }
+  ]
+}
+```
+
+## Prometheus Alert Rules
+
+Save the rules below to a file (e.g. `prometheus/rules/bankerchanger.yml`) and reference it from `rule_files` in your Prometheus configuration. All rules target the `bankerchanger` job and the metrics documented above.
+
+```yaml
+groups:
+  - name: bankerchanger-platform
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="bankerchanger",status_code=~"5.."}[5m]))
+            / sum(rate(http_requests_total{job="bankerchanger"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate on BANKERCHANGER"
+          description: "5xx error rate is {{ $value | humanizePercentage }} over the last 5m (threshold 5%)."
+
+      - alert: SlowResponses
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="bankerchanger"}[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow HTTP responses on BANKERCHANGER"
+          description: "p95 request latency is {{ $value }}s over the last 5m (threshold 2s)."
+
+      - alert: IndexerLagHigh
+        expr: indexer_ledger_lag{job="bankerchanger"} > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer ledger lag exceeds 10 minutes"
+          description: "Indexer ledger lag is {{ $value }}s (threshold 600s / 10m)."
+```
+
+> **Note:** `indexer_ledger_lag` is expressed in seconds of ledger close time. If your deployment instead exposes the last processed ledger close time (e.g. `indexer_last_processed_ledger_close_time`), use `time() - indexer_last_processed_ledger_close_time{job="bankerchanger"} > 600` as the alert expression.
+

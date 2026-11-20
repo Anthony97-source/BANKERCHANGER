@@ -1,3 +1,13 @@
+# Backend CI
+#
+# REQUIRED PR CHECK: The `test` job (name: "TypeScript Build + Tests") must be
+# marked as a required status check in the repository's branch protection rules
+# (Settings > Branches > Branch protection rules > Require status checks to pass).
+# This blocks merging any pull request when lint, build, or tests fail.
+#
+# The job runs on every pull_request event and produces a coverage report
+# uploaded as a workflow artifact (and to Codecov when CODECOV_TOKEN is set).
+
 name: Backend CI
 
 on:
@@ -113,6 +123,35 @@ jobs:
           DATABASE_URL: postgresql://bankerchanger:bankerchanger@localhost:5432/bankerchanger
           BET_LOAD_DATABASE_URL: postgresql://bankerchanger:bankerchanger@localhost:5432/bankerchanger
           REDIS_URL: redis://localhost:6379
+
+      - name: Coverage
+        working-directory: backend
+        run: npm run test:coverage
+        env:
+          DATABASE_URL: postgresql://bankerchanger:bankerchanger@localhost:5432/bankerchanger
+          BET_LOAD_DATABASE_URL: postgresql://bankerchanger:bankerchanger@localhost:5432/bankerchanger
+          REDIS_URL: redis://localhost:6379
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/coverage/
+            backend/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        if: always() && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: backend/coverage/lcov.info
+          flags: backend
+          fail_ci_if_error: false
 
       - name: Build production Docker image
         run: docker build -t bankerchanger-backend ./backend
