@@ -1,5 +1,6 @@
 import { pool } from '../config/db';
 import { redis } from '../config/redis';
+import { indexerLedgerLag, indexerLedgersProcessedTotal } from '../metrics';
 
 /**
  * Ledger range tracking for the Soroban RPC event poller.
@@ -22,6 +23,7 @@ export interface LedgerRange {
 
 const REDIS_RANGES_KEY = 'indexer:processed_ranges';
 const REDIS_LAST_KEY = 'indexer:last_processed_ledger';
+const REDIS_LATEST_KEY = 'indexer:latest_network_ledger';
 const RANGES_CACHE_TTL_SECONDS = 30;
 
 // Advisory lock id ("IDXR") serialises writers updating ledger ranges so that
@@ -136,6 +138,20 @@ export async function getLastProcessedLedger(): Promise<number> {
 }
 
 /**
+ * Best-effort lookup of the latest ledger known to the network. Prefers the
+ * value cached by the poller in Redis; returns null when unavailable so callers
+ * can skip updating lag metrics.
+ */
+async function getLatestNetworkLedger(): Promise<number | null> {
+  const cached = await redis.get(REDIS_LATEST_KEY).catch(() => null);
+  if (cached !== null && cached !== undefined) {
+    const n = Number(cached);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
  * Persist `[start, end]` as fully processed, under transaction isolation.
  *
  * The write runs inside a SERIALIZABLE transaction guarded by an advisory
@@ -185,6 +201,18 @@ export async function recordProcessedRange(start: number, end: number): Promise<
 
     await redis.set(REDIS_RANGES_KEY, JSON.stringify(merged)).catch(() => undefined);
     await redis.set(REDIS_LAST_KEY, String(maxEnd)).catch(() => undefined);
+
+    // Keep the indexer metrics fresh even when the poller is idle: record how
+    // many ledgers were processed and how far behind the network head we are.
+    const processedCount = end - start + 1;
+    if (processedCount > 0) {
+      indexerLedgersProcessedTotal.inc(processedCount);
+    }
+
+    const latestLedger = await getLatestNetworkLedger();
+    if (latestLedger !== null) {
+      indexerLedgerLag.set(Math.max(0, latestLedger - maxEnd));
+    }
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

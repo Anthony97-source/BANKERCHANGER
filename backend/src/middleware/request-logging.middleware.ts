@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { requestContext } from '../utils/requestContext';
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
+import { httpRequestDuration, httpRequestsTotal } from '../services/metrics.service';
 
 const SENSITIVE_PATHS = [
   '/auth/login',
@@ -22,6 +23,15 @@ export function requestLogging(req: Request, res: Response, next: NextFunction):
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const method = req.method;
   const path = req.path;
+
+  // Record HTTP metrics on response finish
+  res.on('finish', () => {
+    const durationMs = Date.now() - startTime;
+    const route = req.route?.path || req.path;
+    const statusCode = String(res.statusCode);
+    httpRequestDuration.observe({ method, route, status_code: statusCode }, durationMs);
+    httpRequestsTotal.inc({ method, route, status_code: statusCode });
+  });
 
   // Capture response end to log status and response time
   const originalSend = res.send;

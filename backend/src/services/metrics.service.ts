@@ -32,6 +32,13 @@ export const dbQueryDuration = new Histogram({
   buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5],
 });
 
+/** Gauge tracking database connection pool size, labeled by state (total, idle, waiting). */
+export const dbConnections = new Gauge({
+  name: 'db_connections',
+  help: 'Number of database connections in the pool by state',
+  labelNames: ['state'] as const,
+});
+
 // ── Redis / Cache Metrics ─────────────────────────────────────────────────────
 
 /** Counter tracking Redis cache hits. */
@@ -87,6 +94,20 @@ export const cronBlockchainEventsDeleted = new Counter({
 export const indexerGapBackfillTotal = new Counter({
   name: 'indexer_gap_backfill_total',
   help: 'Total missing ledgers backfilled during gap recovery',
+});
+
+// ── Indexer Metrics ───────────────────────────────────────────────────────────
+
+/** Counter tracking total ledgers processed by the indexer. */
+export const indexerLedgersProcessedTotal = new Counter({
+  name: 'indexer_ledgers_processed_total',
+  help: 'Total number of ledgers processed by the indexer',
+});
+
+/** Gauge tracking the indexer lag in ledgers (latest network ledger minus last processed ledger). */
+export const indexerLedgerLag = new Gauge({
+  name: 'indexer_ledger_lag',
+  help: 'Number of ledgers the indexer is behind the network tip',
 });
 
 export { register };

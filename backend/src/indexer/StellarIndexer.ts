@@ -12,6 +12,7 @@ import { subscribeToContractEvents, fetchHistoricalEvents } from '../services/St
 import { cacheDeletePattern } from '../services/cache.service';
 import { broadcastMarketResolved } from '../websocket/realtime';
 import { enqueueWebhookEvent } from '../services/webhookDelivery.service';
+import { indexerLedgersProcessedTotal, indexerLedgerLag } from '../services/metrics.service';
 
 // Raw event shape returned by Stellar RPC / Horizon
 export interface RawStellarEvent {
@@ -218,8 +219,10 @@ export async function pollOnce(lastProcessed: number): Promise<number> {
   }
 
   for (let seq = lastProcessed + 1; seq <= latestLedger; seq++) {
+    let processed = false;
     try {
       await processLedger(seq);
+      processed = true;
     } catch (err) {
       if (isLedgerRangeError(err)) {
         console.warn(`[Indexer] Ledger ${seq} unavailable (pruned/out of range), skipping`, err);
@@ -229,7 +232,13 @@ export async function pollOnce(lastProcessed: number): Promise<number> {
     }
     await saveCheckpoint(seq);
     lastProcessed = seq;
+
+    if (processed) {
+      indexerLedgersProcessedTotal.inc();
+    }
   }
+
+  indexerLedgerLag.set(Math.max(latestLedger - lastProcessed, 0));
 
   return lastProcessed;
 }
