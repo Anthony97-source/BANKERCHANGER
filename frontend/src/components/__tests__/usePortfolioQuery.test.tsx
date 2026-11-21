@@ -1,10 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { useQuery } from '@tanstack/react-query';
-import { calculatePortfolioPerformance, usePortfolio } from '../usePortfolio';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { calculatePortfolioPerformance, usePortfolio } from '../../hooks/queries/usePortfolio';
 import type { Market, Portfolio } from '../../types';
 
-jest.mock('@tanstack/react-query', () => ({ useQuery: jest.fn() }));
-jest.mock('../useWallet', () => ({ useWallet: () => ({ address: 'GTEST' }) }));
+jest.mock('@tanstack/react-query', () => ({
+  useInfiniteQuery: jest.fn(),
+  useQuery: jest.fn(),
+}));
+jest.mock('../../hooks/useWallet', () => ({ useWallet: () => ({ address: 'GTEST' }) }));
 jest.mock('../../services/api', () => ({ fetchPortfolio: jest.fn() }));
 jest.mock('../../services/wallet', () => ({ submitClaim: jest.fn(), submitRefund: jest.fn() }));
 
@@ -40,9 +43,21 @@ describe('usePortfolio performance', () => {
   beforeEach(() => {
     MockEventSource.instances = [];
     window.EventSource = MockEventSource as unknown as typeof EventSource;
-    (useQuery as jest.Mock).mockImplementation(({ queryKey }) => queryKey[0] === 'portfolio'
-      ? { data: portfolio, isLoading: false, error: null, refetch: jest.fn() }
-      : { data: { bets: [], total: 0 }, isLoading: false, error: null, refetch: jest.fn() });
+    (useQuery as jest.Mock).mockReturnValue({
+      data: portfolio,
+      isLoading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    (useInfiniteQuery as jest.Mock).mockReturnValue({
+      data: { pages: [{ bets: [], total: 0, nextCursor: null, limit: 25 }] },
+      isLoading: false,
+      error: null,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: jest.fn(),
+      refetch: jest.fn(),
+    });
   });
 
   afterEach(() => {

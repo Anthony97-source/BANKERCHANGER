@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from 'react';
 import type { Bet, Market } from '../../types';
 import { useWallet } from '../../hooks/useWallet';
-import { useClaimWinnings } from '../../hooks/useClaimWinnings';
+import { useClaimWinnings } from '../../hooks/mutations/useClaimWinnings';
 import { TransactionStatus } from '../ui/TransactionStatus';
 import { stellarExplorerUrl } from '../../services/wallet';
 
