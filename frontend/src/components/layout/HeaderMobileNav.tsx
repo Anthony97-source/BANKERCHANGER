@@ -16,12 +16,14 @@ export function HeaderMobileNav({
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
         setMenuOpen(false);
         return;
       }
@@ -47,7 +49,10 @@ export function HeaderMobileNav({
     const firstFocusable = navRef.current?.querySelector<HTMLElement>(FOCUSABLE);
     firstFocusable?.focus();
 
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      triggerRef.current?.focus();
+    };
   }, [menuOpen]);
 
   const linkClass = (href: string) =>
@@ -56,13 +61,15 @@ export function HeaderMobileNav({
   return (
     <>
       <button
-        className="md:hidden flex items-center justify-center w-11 h-11 text-gray-400 hover:text-white"
+        ref={triggerRef}
+        type="button"
+        className="md:hidden flex items-center justify-center w-11 h-11 text-gray-400 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 rounded"
         onClick={() => setMenuOpen((o) => !o)}
-        aria-label="Toggle menu"
+        aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
         aria-expanded={menuOpen}
         aria-controls="mobile-navigation-dialog"
       >
-        ☰
+        <span aria-hidden="true">☰</span>
       </button>
 
       {menuOpen && (
@@ -79,7 +86,8 @@ export function HeaderMobileNav({
               key={href}
               href={href}
               onClick={() => setMenuOpen(false)}
-              className={`flex items-center min-h-[44px] ${linkClass(href)}`}
+              aria-current={pathname === href ? 'page' : undefined}
+              className={`flex items-center min-h-[44px] rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 ${linkClass(href)}`}
             >
               {label}
             </Link>

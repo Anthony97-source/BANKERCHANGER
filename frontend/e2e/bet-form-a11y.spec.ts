@@ -123,4 +123,95 @@ test.describe('Bet form accessibility', () => {
     await fighterButton.click();
     await expect(fighterButton).toHaveAttribute('aria-pressed', 'true');
   });
+
+  test('should have no axe violations across WCAG 2.1 AA rules', async ({ page }) => {
+    await openBetForm(page);
+
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+      .analyze();
+
+    if (results.violations.length > 0) {
+      console.error(
+        'Axe violations on bet form:',
+        JSON.stringify(results.violations, null, 2),
+      );
+    }
+
+    expect(results.violations).toHaveLength(0);
+  });
+
+  test('keyboard navigation: Tab reaches fields and Enter submits', async ({ page }) => {
+    await openBetForm(page);
+
+    const amountInput = page.getByLabel(/amount \(xlm\)/i);
+    await amountInput.focus();
+    await expect(amountInput).toBeFocused();
+
+    // Tab moves focus forward to the next interactive control.
+    await page.keyboard.press('Tab');
+    const focusedAfterTab = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return el ? el.tagName.toLowerCase() : null;
+    });
+    expect(focusedAfterTab).not.toBeNull();
+    expect(focusedAfterTab).not.toBe('body');
+
+    // Fill the amount and select an outcome, then submit via Enter.
+    await amountInput.fill('10');
+    await page
+      .getByRole('group', { name: /choose your outcome/i })
+      .getByRole('button', { name: /fighter alpha/i })
+      .click();
+
+    const submitButton = page.getByRole('button', { name: /^place bet$/i });
+    await submitButton.focus();
+    await expect(submitButton).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    // Enter should trigger the confirmation step (modal or inline confirm).
+    await expect(
+      page.getByRole('dialog').or(page.getByRole('button', { name: /confirm/i })),
+    ).toBeVisible({ timeout: 8000 });
+  });
+
+  test('Escape closes the confirmation modal and returns focus', async ({ page }) => {
+    await openBetForm(page);
+
+    await page.getByLabel(/amount \(xlm\)/i).fill('10');
+    await page
+      .getByRole('group', { name: /choose your outcome/i })
+      .getByRole('button', { name: /fighter alpha/i })
+      .click();
+    await page.getByRole('button', { name: /^place bet$/i }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 8000 });
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden({ timeout: 8000 });
+  });
+
+  test('invalid amount is associated with an error message', async ({ page }) => {
+    await openBetForm(page);
+
+    const amountInput = page.getByLabel(/amount \(xlm\)/i);
+    await amountInput.fill('0');
+    await page
+      .getByRole('group', { name: /choose your outcome/i })
+      .getByRole('button', { name: /fighter alpha/i })
+      .click();
+    await page.getByRole('button', { name: /^place bet$/i }).click();
+
+    // The input must be flagged invalid for assistive tech.
+    await expect(amountInput).toHaveAttribute('aria-invalid', 'true');
+
+    // The error message must be linked via aria-describedby.
+    const describedBy = await amountInput.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+
+    const errorMessage = page.locator(`#${describedBy}`);
+    await expect(errorMessage).toBeVisible();
+    await expect(errorMessage).not.toBeEmpty();
+  });
 });

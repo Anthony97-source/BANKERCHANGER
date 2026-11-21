@@ -37,6 +37,13 @@ const ICON_STYLES: Record<ToastType, string> = {
   info: 'text-blue-400',
 };
 
+const TYPE_LABELS: Record<ToastType, string> = {
+  success: 'Success',
+  error: 'Error',
+  info: 'Information',
+};
+=======
+
 export function ToastProvider({ children }: { children: React.ReactNode }): JSX.Element {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const counter = useRef(0);
@@ -70,34 +77,56 @@ export function ToastProvider({ children }: { children: React.ReactNode }): JSX.
     info: (msg) => add('info', msg),
   };
 
+  const infoToasts = toasts.filter((t) => t.type !== 'error');
+  const errorToasts = toasts.filter((t) => t.type === 'error');
+
+  const renderToast = (toast: Toast) => (
+    <div
+      key={toast.id}
+      role={toast.type === 'error' ? 'alert' : 'status'}
+      className={`pointer-events-auto flex items-start gap-3 bg-gray-900 border rounded-xl shadow-xl px-4 py-3 ${STYLES[toast.type]}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`text-lg leading-none mt-0.5 ${ICON_STYLES[toast.type]}`}
+      >
+        {ICONS[toast.type]}
+      </span>
+      <p className="flex-1 text-sm text-white">
+        <span className="sr-only">{TYPE_LABELS[toast.type]}: </span>
+        {toast.message}
+      </p>
+      <button
+        type="button"
+        onClick={() => dismiss(toast.id)}
+        aria-label={`Dismiss ${TYPE_LABELS[toast.type].toLowerCase()} notification: ${toast.message}`}
+        className="text-gray-400 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2"
+      >
+        <span aria-hidden="true">✕</span>
+      </button>
+    </div>
+  );
+
   return (
     <ToastContext.Provider value={value}>
       {children}
-      {/* aria-live region for accessibility */}
+      {/* Polite live region for success/info toasts */}
       <div
         aria-live="polite"
         aria-atomic="false"
+        aria-relevant="additions text"
         className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"
       >
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            role="status"
-            className={`pointer-events-auto flex items-start gap-3 bg-gray-900 border rounded-xl shadow-xl px-4 py-3 ${STYLES[toast.type]}`}
-          >
-            <span className={`text-lg leading-none mt-0.5 ${ICON_STYLES[toast.type]}`}>
-              {ICONS[toast.type]}
-            </span>
-            <p className="flex-1 text-sm text-white">{toast.message}</p>
-            <button
-              onClick={() => dismiss(toast.id)}
-              aria-label="Dismiss notification"
-              className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2"
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+        {infoToasts.map(renderToast)}
+      </div>
+      {/* Assertive live region for error toasts */}
+      <div
+        aria-live="assertive"
+        aria-atomic="false"
+        aria-relevant="additions text"
+        className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"
+      >
+        {errorToasts.map(renderToast)}
       </div>
     </ToastContext.Provider>
   );

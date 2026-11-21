@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { WalletButton } from './WalletButton';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -20,6 +20,8 @@ export function Header(): JSX.Element {
   const pathname = usePathname();
   const [bannerDismissed, setBannerDismissed] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileNavRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (IS_MAINNET) {
@@ -27,13 +29,45 @@ export function Header(): JSX.Element {
     }
   }, []);
 
+  const closeMenu = useCallback((returnFocus = false) => {
+    setMenuOpen(false);
+    if (returnFocus) {
+      menuButtonRef.current?.focus();
+    }
+  }, []);
+
+  // Close the mobile menu on Escape and return focus to the toggle.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        closeMenu(true);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [menuOpen, closeMenu]);
+
+  // Close the mobile menu when navigating to a different route.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
+  // Move focus into the drawer when it opens.
+  useEffect(() => {
+    if (menuOpen) {
+      mobileNavRef.current?.querySelector<HTMLElement>('a')?.focus();
+    }
+  }, [menuOpen]);
+
   const dismissBanner = () => {
     sessionStorage.setItem(BANNER_KEY, '1');
     setBannerDismissed(true);
   };
 
   const linkClass = (href: string) =>
-    `hover:text-gray-900 dark:hover:text-white transition-colors ${pathname === href ? 'text-gray-900 dark:text-white font-semibold border-b-2 border-amber-500 pb-0.5' : 'text-gray-600 dark:text-gray-400'}`;
+    `rounded-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950 hover:text-gray-900 dark:hover:text-white ${pathname === href ? 'text-gray-900 dark:text-white font-semibold border-b-2 border-amber-500 pb-0.5' : 'text-gray-600 dark:text-gray-400'}`;
 
   // Matches /create/page.tsx admin logic
   const connectedAddress =
@@ -52,24 +86,34 @@ export function Header(): JSX.Element {
         <div className="bg-red-600 text-white text-sm text-center py-2 px-4 flex items-center justify-center gap-3">
           <span>⚠️ You are betting with real XLM on mainnet</span>
           <button
+            type="button"
             onClick={dismissBanner}
-            className="ml-auto text-white/80 hover:text-white font-bold"
+            className="ml-auto text-white/80 hover:text-white font-bold rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-red-600"
+            aria-label="Dismiss mainnet warning"
           >
-            ✕
+            <span aria-hidden="true">✕</span>
           </button>
         </div>
       )}
 
       <header className="sticky top-0 z-40 bg-white dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 transition-colors">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-6">
-          <Link href="/" className="font-black text-amber-500 text-xl tracking-tight">
+          <Link
+            href="/"
+            className="font-black text-amber-500 text-xl tracking-tight rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950"
+          >
             BANKERCHANGER
           </Link>
 
           {/* Desktop nav */}
           <nav className="hidden md:flex gap-4 text-sm" aria-label="Main navigation">
             {visibleNavLinks.map(({ href, label }) => (
-              <Link key={href} href={href} className={linkClass(href)}>
+              <Link
+                key={href}
+                href={href}
+                aria-current={pathname === href ? 'page' : undefined}
+                className={linkClass(href)}
+              >
                 {label}
               </Link>
             ))}
@@ -88,12 +132,15 @@ export function Header(): JSX.Element {
 
             {/* Mobile hamburger */}
             <button
-              className="md:hidden flex items-center justify-center w-11 h-11 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+              ref={menuButtonRef}
+              type="button"
+              className="md:hidden flex items-center justify-center w-11 h-11 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950"
               onClick={() => setMenuOpen((o) => !o)}
-              aria-label="Toggle menu"
+              aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
               aria-expanded={menuOpen}
+              aria-controls="mobile-navigation"
             >
-              ☰
+              <span aria-hidden="true">☰</span>
             </button>
           </div>
         </div>
@@ -101,6 +148,8 @@ export function Header(): JSX.Element {
         {/* Mobile nav drawer */}
         {menuOpen && (
           <nav
+            ref={mobileNavRef}
+            id="mobile-navigation"
             className="md:hidden bg-white dark:bg-gray-950 border-t border-gray-200 dark:border-gray-800 px-4 py-2 flex flex-col text-sm transition-colors"
             aria-label="Mobile navigation"
           >
@@ -108,7 +157,8 @@ export function Header(): JSX.Element {
               <Link
                 key={href}
                 href={href}
-                onClick={() => setMenuOpen(false)}
+                onClick={() => closeMenu()}
+                aria-current={pathname === href ? 'page' : undefined}
                 className={`flex items-center min-h-[44px] ${linkClass(href)}`}
               >
                 {label}
