@@ -14,8 +14,29 @@ const extracted = swaggerJsdoc({
   apis: [path.join(root, 'src/routes/*.ts')],
   failOnErrors: true,
 });
+// Deep-merge so curated descriptions, examples, security, parameters and
+// response schemas from openapi-base.yaml always win over extracted
+// annotations, while extracted-only fields (e.g. new routes) are still added.
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function deepMerge(base, override) {
+  if (!isPlainObject(base) || !isPlainObject(override)) return override;
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    merged[key] = key in merged ? deepMerge(merged[key], value) : value;
+  }
+  return merged;
+}
 for (const [route, operations] of Object.entries(extracted.paths || {})) {
-  definition.paths[route] = { ...operations, ...definition.paths[route] };
+  definition.paths[route] = deepMerge(operations, definition.paths[route] || {});
+}
+// Preserve curated top-level sections (security schemes, reusable responses,
+// error-code schemas, etc.) and only fill in missing ones from extraction.
+for (const section of ['components', 'security', 'servers']) {
+  if (extracted[section] !== undefined) {
+    definition[section] = deepMerge(extracted[section], definition[section] || {});
+  }
 }
 // Normalize legacy annotations to the OpenAPI 3.0 schema dialect.
 function normalize(value) {
@@ -63,4 +84,22 @@ for (const [route, item] of Object.entries(definition.paths)) {
   if (JSON.stringify(item) !== JSON.stringify(originalPaths[route])) document.setIn(['paths', route], item);
 }
 document.set('tags', definition.tags);
+// Keep generated output deterministic for CI: sort paths, tags and component
+// keys so annotation ordering in source files cannot cause spurious diffs.
+function sortKeys(value) {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sortKeys(value[key])])
+  );
+}
+const sortedPaths = sortKeys(definition.paths);
+document.set('paths', sortedPaths);
+if (definition.components) document.set('components', sortKeys(definition.components));
+document.set(
+  'tags',
+  [...definition.tags].sort((a, b) => String(a.name).localeCompare(String(b.name)))
+);
 fs.writeFileSync(path.join(root, 'openapi.yaml'), document.toString({ lineWidth: 0 }));

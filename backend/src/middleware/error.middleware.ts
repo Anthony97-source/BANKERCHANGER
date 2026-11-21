@@ -6,21 +6,32 @@ const isProd = process.env.NODE_ENV === 'production';
 
 export function errorMiddleware(
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction,
 ): void {
+  // request_id is injected via the logger mixin/requestContext (pino-http),
+  // so all logs below automatically include it for tracing.
+  const requestId =
+    (req as Request & { id?: string | number }).id ??
+    (req.headers['x-request-id'] as string | undefined);
+
   if (err instanceof AppError) {
+    const logPayload = {
+      message: err.message,
+      statusCode: err.statusCode,
+      code: err.code,
+      details: err.details,
+      request_id: requestId,
+      ...(!isProd && { stack: err.stack }),
+    };
+
     if (err.statusCode >= 500) {
-      logger.error({
-        message: err.message,
-        statusCode: err.statusCode,
-        code: err.code,
-        details: err.details,
-        ...(!isProd && { stack: err.stack }),
-      });
+      logger.error(logPayload);
+    } else {
+      logger.warn(logPayload);
     }
-    
+
     // Never include stack trace in response body for any environment
     // Stack traces are only logged server-side
     res.status(err.statusCode).json({
@@ -37,6 +48,8 @@ export function errorMiddleware(
   const message = err instanceof Error ? err.message : 'Internal server error';
   logger.error({
     message,
+    statusCode: 500,
+    request_id: requestId,
     ...(!isProd && { stack: err instanceof Error ? err.stack : undefined }),
   });
 

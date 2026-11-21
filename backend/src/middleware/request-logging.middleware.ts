@@ -13,16 +13,16 @@ const SENSITIVE_PATHS = [
 ];
 
 /**
- * Request logging middleware with structured format.
- * Development: human-readable format
- * Production: JSON format for log aggregation
- * Masks request body for sensitive paths and redacts Authorization header
+ * Request logging middleware backed by pino-http.
+ * - Generates or accepts an incoming X-Request-Id for tracing.
+ * - Stores the request id in AsyncLocalStorage for the whole request lifecycle.
+ * - Sets the X-Request-Id response header.
+ * - Emits structured JSON logs (method, path, statusCode, responseTime, ip, request_id).
+ * - Masks request body for sensitive paths and redacts Authorization header.
  */
 export function requestLogging(req: Request, res: Response, next: NextFunction): void {
-  const startTime = Date.now();
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  const method = req.method;
-  const path = req.path;
+  const incomingId = req.get('x-request-id');
+  const requestId = incomingId && incomingId.trim() ? incomingId.trim() : randomUUID();
 
   // Record HTTP metrics on response finish
   res.on('finish', () => {
@@ -39,31 +39,40 @@ export function requestLogging(req: Request, res: Response, next: NextFunction):
     const responseTime = Date.now() - startTime;
     const statusCode = res.statusCode;
 
-    const isSensitive = SENSITIVE_PATHS.some((p) => path.startsWith(p));
-    const body = isSensitive ? '[REDACTED]' : JSON.stringify(req.body);
+  const isSensitive = SENSITIVE_PATHS.some((p) => req.path.startsWith(p));
 
-    // Redact Authorization header to prevent token leakage
-    const authHeader = req.get('authorization');
-    const displayAuthHeader = authHeader ? 'Bearer [REDACTED]' : undefined;
-
-    const logData = {
-      method,
-      path,
-      statusCode,
+  const httpLogger = pinoHttp({
+    logger,
+    genReqId: () => requestId,
+    customProps: () => ({ request_id: requestId }),
+    serializers: {
+      req: (request: Request) => {
+        const authHeader = request.get('authorization');
+        return {
+          method: request.method,
+          path: request.path,
+          ip: request.ip || request.socket?.remoteAddress || 'unknown',
+          ...(isSensitive && { body: '[REDACTED]' }),
+          ...(authHeader && { authorization: 'Bearer [REDACTED]' }),
+        };
+      },
+      res: (response: Response) => ({
+        statusCode: response.statusCode,
+      }),
+    },
+    customLogObject: (req: Request, res: Response, responseTime: number) => ({
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
       responseTime: `${responseTime}ms`,
-      ip,
-      ...(isSensitive && { body }),
-      ...(displayAuthHeader && { authorization: displayAuthHeader }),
-    };
+      ip: req.ip || req.socket?.remoteAddress || 'unknown',
+      request_id: requestId,
+    }),
+  });
 
-    if (process.env.NODE_ENV === 'production') {
-      logger.info(logData, `${method} ${path} ${statusCode}`);
-    } else {
-      logger.info(logData, `${method} ${path} ${statusCode} (${responseTime}ms)`);
-    }
-
-    return originalSend.call(this, data);
-  };
-
-  requestContext.run({ requestId: String(req.id ?? randomUUID()) }, next);
+  // Run the rest of the request lifecycle inside the AsyncLocalStorage context
+  // so that request_id is available to all downstream logs.
+  requestContext.run({ requestId }, () => {
+    httpLogger(req, res, next);
+  });
 }

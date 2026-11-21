@@ -2,7 +2,51 @@ openapi: 3.0.3
 info:
   title: BANKERCHANGER API
   version: 0.2.0
-  description: REST API for the BANKERCHANGER decentralized boxing prediction market.
+  description: |
+    REST API for the BANKERCHANGER decentralized boxing prediction market.
+
+    ## Overview
+    The API exposes market discovery, betting, wallet, oracle, governance,
+    affiliate, social and admin functionality. All responses are JSON unless
+    otherwise noted (CSV exports and Prometheus metrics are the exceptions).
+
+    ## Authentication
+    Most write endpoints and all account-scoped endpoints require a JWT access
+    token sent as `Authorization: Bearer <token>`. Tokens are obtained from
+    `POST /auth/login` (or `POST /auth/register` followed by login) and expire
+    after the configured TTL; use `POST /auth/refresh` to rotate them.
+
+    Oracle endpoints additionally accept an `X-Oracle-Key` header for
+    machine-to-machine oracle submissions.
+
+    ## Rate limits
+    Every endpoint is rate-limited. Limits are applied per route group using
+    Redis-backed counters keyed by client IP or authenticated user id. When a
+    limit is exceeded the API responds with HTTP `429` and a `Retry-After`
+    header (seconds until the window resets). See `x-rateLimit-defaults` in
+    `components` for the default windows and per-endpoint `x-rateLimit-*`
+    extensions for overrides.
+
+    ## Errors
+    Errors use a consistent envelope: `{ "success": false, "message": "...",
+    "code": "..." }`. The `code` field is a stable machine-readable identifier
+    (see `components.schemas.ErrorCode`). Common HTTP statuses:
+
+    | Status | Meaning |
+    | ------ | ------- |
+    | 400 | Invalid request (validation, malformed body/query) |
+    | 401 | Missing, invalid or expired credentials |
+    | 403 | Authenticated but not permitted |
+    | 404 | Resource not found |
+    | 409 | Conflict (duplicate resource / invalid state transition) |
+    | 422 | Semantically invalid request |
+    | 429 | Rate limit exceeded |
+    | 500 | Internal server error |
+    | 503 | Dependency unavailable |
+
+    ## Examples
+    Each operation includes request and/or response examples. Examples use
+    placeholder values; replace ids, addresses and tokens with real values.
 
 servers:
   - url: http://localhost:3001
@@ -14,10 +58,16 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: |
+        JWT access token issued by `POST /auth/login`. Send as
+        `Authorization: Bearer <token>`.
     oracleKey:
       type: apiKey
       in: header
       name: X-Oracle-Key
+      description: |
+        Shared secret used by trusted oracle services to submit results
+        without a user JWT.
 
   schemas:
     Error:
@@ -67,6 +117,69 @@ components:
         code: { type: string, example: "INTERNAL_SERVER_ERROR" }
         requestId: { type: string, description: "Unique identifier for this error instance for debugging." }
       required: [ success, message ]
+
+    ErrorResponse404:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, description: "The requested resource does not exist." }
+        code: { type: string, example: "NOT_FOUND" }
+      required: [ success, message ]
+
+    ErrorResponse409:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, description: "The request conflicts with the current state of the resource." }
+        code: { type: string, example: "CONFLICT" }
+      required: [ success, message ]
+
+    ErrorResponse422:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, description: "The request was well-formed but semantically invalid." }
+        code: { type: string, example: "VALIDATION_ERROR" }
+      required: [ success, message ]
+
+    ErrorResponse503:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, description: "A required dependency is unavailable. Retry later." }
+        code: { type: string, example: "SERVICE_UNAVAILABLE" }
+      required: [ success, message ]
+
+    ErrorCode:
+      type: string
+      description: |
+        Stable machine-readable error code. Mirrors the codes defined in
+        `backend/src/errors/errorCodes.ts`. Clients should branch on this value
+        rather than on the human-readable `message`.
+      enum:
+        - INVALID_REQUEST
+        - VALIDATION_ERROR
+        - UNAUTHORIZED
+        - INVALID_TOKEN
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - DUPLICATE_RESOURCE
+        - INVALID_STATE
+        - RATE_LIMIT_EXCEEDED
+        - INTERNAL_SERVER_ERROR
+        - SERVICE_UNAVAILABLE
+        - ORACLE_UNAUTHORIZED
+        - ORACLE_NOT_WHITELISTED
+        - INSUFFICIENT_BALANCE
+        - MARKET_CLOSED
+        - MARKET_NOT_FOUND
+        - BET_NOT_FOUND
+        - DISPUTE_NOT_FOUND
+        - WITHDRAWAL_LIMIT_EXCEEDED
+        - WEBHOOK_DELIVERY_FAILED
+      example: INVALID_REQUEST
 
     UserDTO:
       type: object
@@ -253,6 +366,19 @@ components:
       All endpoints are rate-limited. Limits are enforced per route group using
       Redis-backed counters. When a limit is exceeded the API returns HTTP 429
       with a Retry-After header indicating seconds until the window resets.
+    headers:
+      Retry-After:
+        description: Seconds until the current rate-limit window resets.
+        schema: { type: integer, minimum: 0 }
+      X-RateLimit-Limit:
+        description: Maximum number of requests allowed in the window.
+        schema: { type: integer }
+      X-RateLimit-Remaining:
+        description: Requests remaining in the current window.
+        schema: { type: integer }
+      X-RateLimit-Reset:
+        description: Unix epoch seconds when the window resets.
+        schema: { type: integer }
     groups:
       - prefix: /auth
         windowMs: 60000
@@ -286,6 +412,10 @@ paths:
   /health:
     get:
       summary: Health check for the API, database, and Redis
+      description: |
+        Liveness/readiness probe. Returns `200` when the API, database and Redis
+        are all reachable, and `503` when any dependency is down. No
+        authentication required.
       operationId: healthCheck
       tags: [ System ]
       responses:
@@ -300,6 +430,11 @@ paths:
                   db: { type: string, example: connected }
                   redis: { type: string, example: connected }
                   version: { type: string }
+              example:
+                status: ok
+                db: connected
+                redis: connected
+                version: 0.2.0
         '503':
           description: One or more dependencies unreachable
           content:
@@ -308,10 +443,16 @@ paths:
                 type: object
                 properties:
                   status: { type: string, example: error }
+              example:
+                status: error
 
   /metrics:
     get:
       summary: Prometheus metrics endpoint
+      description: |
+        Exposes application metrics in Prometheus text exposition format for
+        scraping. No authentication required; restrict access at the network
+        layer in production.
       operationId: prometheusMetrics
       tags: [ System ]
       responses:
@@ -320,6 +461,10 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+              example: |
+                # HELP http_requests_total Total HTTP requests
+                # TYPE http_requests_total counter
+                http_requests_total{method="GET",route="/health",status="200"} 42
 
   # ---------------------------------------------------------------------------
   # Auth
@@ -327,6 +472,9 @@ paths:
   /auth/register:
     post:
       summary: Register a new user
+      description: |
+        Creates a new account and sends a verification email. Passwords must be
+        at least 8 characters. Rate limited to 10 requests/minute per IP.
       operationId: register
       tags: [ Auth ]
       x-rateLimit-windowMs: 60000
@@ -342,6 +490,9 @@ paths:
               properties:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 8 }
+            example:
+              email: bettor@example.com
+              password: correct-horse-battery
       responses:
         '201':
           description: Registration successful; verification email sent
@@ -352,18 +503,32 @@ paths:
                 properties:
                   userId: { type: string }
                   message: { type: string }
+              example:
+                userId: 8f14e45f-ceea-467f-a1c2-1b2c3d4e5f60
+                message: Verification email sent
         '400':
           description: Invalid email format or password too short
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse400' }
+              example:
+                success: false
+                message: Password must be at least 8 characters
+                code: VALIDATION_ERROR
         '409':
           description: Email already registered
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: '#/components/schemas/ErrorResponse409' }
+              example:
+                success: false
+                message: Email already registered
+                code: DUPLICATE_RESOURCE
         '429':
           description: Rate limit exceeded
+          headers:
+            Retry-After:
+              $ref: '#/components/x-rateLimit-defaults/headers/Retry-After'
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse429' }
@@ -2006,13 +2171,14 @@ paths:
   /api/disputes/{disputeId}:
     get:
       summary: Get dispute details
+      description: Returns a single dispute by its UUID.
       operationId: getDispute
       tags: [ Disputes ]
       parameters:
         - name: disputeId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Dispute details
@@ -2023,6 +2189,18 @@ paths:
                 properties:
                   success: { type: boolean }
                   data: { $ref: '#/components/schemas/Dispute' }
+              example:
+                success: true
+                data:
+                  id: 3f2b1a9c-7d4e-4c1b-9a2f-0e1d2c3b4a59
+                  market_id: mkt_123
+                  reason: Incorrect outcome reported
+                  status: open
+                  admin_notes: null
+                  final_outcome: null
+                  raised_at: '2024-05-01T12:00:00Z'
+                  reviewed_at: null
+                  resolved_at: null
         '400':
           description: Invalid dispute ID format
           content:
@@ -2032,7 +2210,11 @@ paths:
           description: Dispute not found
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: '#/components/schemas/ErrorResponse404' }
+              example:
+                success: false
+                message: Dispute not found
+                code: DISPUTE_NOT_FOUND
         '429':
           description: Rate limit exceeded
           content:
@@ -2047,6 +2229,9 @@ paths:
   /api/disputes/{disputeId}/review:
     patch:
       summary: Mark dispute as under review (admin only)
+      description: |
+        Transitions an `open` dispute to `reviewing` and records admin notes.
+        Requires an admin JWT.
       operationId: reviewDispute
       tags: [ Disputes ]
       security:
@@ -2055,7 +2240,7 @@ paths:
         - name: disputeId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
@@ -2065,6 +2250,8 @@ paths:
               required: [ adminNotes ]
               properties:
                 adminNotes: { type: string, minLength: 5, maxLength: 5000 }
+            example:
+              adminNotes: Reviewing the oracle report and video evidence.
       responses:
         '200':
           description: Dispute updated to reviewing
@@ -2075,6 +2262,18 @@ paths:
                 properties:
                   success: { type: boolean }
                   data: { $ref: '#/components/schemas/Dispute' }
+              example:
+                success: true
+                data:
+                  id: 3f2b1a9c-7d4e-4c1b-9a2f-0e1d2c3b4a59
+                  market_id: mkt_123
+                  reason: Incorrect outcome reported
+                  status: reviewing
+                  admin_notes: Reviewing the oracle report and video evidence.
+                  final_outcome: null
+                  raised_at: '2024-05-01T12:00:00Z'
+                  reviewed_at: '2024-05-01T13:00:00Z'
+                  resolved_at: null
         '400':
           description: Invalid request or dispute state
           content:
@@ -2109,6 +2308,10 @@ paths:
   /api/disputes/{disputeId}/resolve:
     patch:
       summary: Resolve a dispute (admin only)
+      description: |
+        Resolves a dispute either by dismissing it or by overriding the market
+        outcome. `newWinningOutcome` is required when `action` is
+        `RESOLVE_NEW_OUTCOME`. Requires an admin JWT.
       operationId: resolveDisputeApi
       tags: [ Disputes ]
       security:
@@ -2117,7 +2320,7 @@ paths:
         - name: disputeId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
@@ -2132,6 +2335,10 @@ paths:
                 resolution: { type: string, minLength: 10, maxLength: 5000 }
                 adminNotes: { type: string, minLength: 5, maxLength: 5000 }
                 newWinningOutcome: { type: integer, enum: [ 0, 1 ] }
+            example:
+              action: RESOLVE_NEW_OUTCOME
+              resolution: Video evidence shows fighter B won on points.
+              newWinningOutcome: 1
       responses:
         '200':
           description: Dispute resolved
@@ -2142,6 +2349,18 @@ paths:
                 properties:
                   success: { type: boolean }
                   data: { $ref: '#/components/schemas/Dispute' }
+              example:
+                success: true
+                data:
+                  id: 3f2b1a9c-7d4e-4c1b-9a2f-0e1d2c3b4a59
+                  market_id: mkt_123
+                  reason: Incorrect outcome reported
+                  status: resolved
+                  admin_notes: null
+                  final_outcome: fighter_b
+                  raised_at: '2024-05-01T12:00:00Z'
+                  reviewed_at: '2024-05-01T13:00:00Z'
+                  resolved_at: '2024-05-02T09:30:00Z'
         '400':
           description: Invalid action or missing fields
           content:
@@ -2179,6 +2398,7 @@ paths:
   /api/admin/disputes:
     get:
       summary: List all disputes (admin only)
+      description: Returns every dispute across all markets. Admin JWT required.
       operationId: adminListDisputes
       tags: [ Admin ]
       x-rateLimit-windowMs: 60000
@@ -2194,6 +2414,16 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/Dispute' }
+              example:
+                - id: 3f2b1a9c-7d4e-4c1b-9a2f-0e1d2c3b4a59
+                  market_id: mkt_123
+                  reason: Incorrect outcome reported
+                  status: open
+                  admin_notes: null
+                  final_outcome: null
+                  raised_at: '2024-05-01T12:00:00Z'
+                  reviewed_at: null
+                  resolved_at: null
         '401':
           description: Unauthorized
           content:
@@ -2218,6 +2448,9 @@ paths:
   /api/admin/webhooks/{id}/retry:
     post:
       summary: Requeue a failed webhook delivery
+      description: |
+        Resets a failed webhook delivery to `pending` so the dispatcher retries
+        it. Admin JWT required.
       operationId: retryWebhookDelivery
       tags: [Admin]
       security:
@@ -2245,6 +2478,15 @@ paths:
                       status: { type: string, enum: [pending] }
                       attempt_count: { type: integer }
                       next_attempt_at: { type: string, format: date-time }
+              example:
+                success: true
+                data:
+                  id: '42'
+                  webhook_id: wh_9f8e7d
+                  event_type: market.resolved
+                  status: pending
+                  attempt_count: 0
+                  next_attempt_at: '2024-05-02T10:00:00Z'
         '400':
           description: Invalid delivery ID
           content:
@@ -2269,6 +2511,9 @@ paths:
   /api/admin/dispute/{market_id}:
     post:
       summary: Flag a market as disputed
+      description: |
+        Marks a market as disputed on-chain and records the reason. Admin JWT
+        required.
       operationId: flagDispute
       tags: [ Admin ]
       security:
@@ -2287,6 +2532,8 @@ paths:
               required: [ reason ]
               properties:
                 reason: { type: string }
+            example:
+              reason: Conflicting oracle reports received
       responses:
         '200':
           description: Market flagged as disputed
@@ -2296,6 +2543,8 @@ paths:
                 type: object
                 properties:
                   tx_hash: { type: string }
+              example:
+                tx_hash: 5c1f0e9d8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e
         '400':
           description: Invalid market ID or reason
           content:
@@ -2330,6 +2579,7 @@ paths:
   /api/admin/dispute/{market_id}/investigate:
     post:
       summary: Mark a dispute as under investigation
+      description: Sets the dispute status to `reviewing` for the given market.
       operationId: investigateDispute
       tags: [ Admin ]
       security:
@@ -2342,6 +2592,14 @@ paths:
       responses:
         '200':
           description: Dispute under investigation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+              example:
+                success: true
         '400':
           description: Invalid market ID or state
           content:
@@ -2376,6 +2634,9 @@ paths:
   /api/admin/resolve-dispute/{market_id}:
     post:
       summary: Resolve a disputed market with admin-verified outcome
+      description: |
+        Resolves a disputed market. `newWinningOutcome` is required when
+        `action` is `RESOLVE_NEW_OUTCOME`. Admin JWT required.
       operationId: adminResolveDispute
       tags: [ Admin ]
       security:
@@ -2397,6 +2658,9 @@ paths:
                   type: string
                   enum: [ DISMISS, RESOLVE_NEW_OUTCOME ]
                 newWinningOutcome: { type: integer, enum: [ 0, 1 ] }
+            example:
+              action: RESOLVE_NEW_OUTCOME
+              newWinningOutcome: 0
       responses:
         '200':
           description: Dispute resolved
@@ -2406,6 +2670,8 @@ paths:
                 type: object
                 properties:
                   tx_hash: { type: string }
+              example:
+                tx_hash: 9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f
         '400':
           description: Invalid action or missing fields
           content:
@@ -2440,6 +2706,9 @@ paths:
   /api/admin/cancel/{market_id}:
     post:
       summary: Cancel a market
+      description: |
+        Cancels a market on-chain. Bettors can then be refunded via
+        `POST /api/admin/cancel/{market_id}/refunds`. Admin JWT required.
       operationId: cancelMarket
       tags: [ Admin ]
       security:
@@ -2458,6 +2727,8 @@ paths:
               required: [ reason ]
               properties:
                 reason: { type: string }
+            example:
+              reason: Fight postponed indefinitely
       responses:
         '200':
           description: Market cancelled
@@ -2467,6 +2738,8 @@ paths:
                 type: object
                 properties:
                   tx_hash: { type: string }
+              example:
+                tx_hash: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b
         '400':
           description: Invalid market ID or reason
           content:

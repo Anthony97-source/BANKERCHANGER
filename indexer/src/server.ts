@@ -1,13 +1,55 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import { randomUUID } from 'crypto';
 import { getPollerHealth } from './poller';
 import { isLive, isReady, getReadinessDetails, getHealthResponse } from './health';
 import { getMetricsPrometheusFormat } from './metrics';
+import { logger } from './logger';
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// ── Request ID Injection for Tracing (#1134) ─────────────────────────────────
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      request_id?: string;
+      log?: typeof logger;
+    }
+  }
+}
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const incoming = req.headers['x-request-id'];
+  const requestId =
+    (Array.isArray(incoming) ? incoming[0] : incoming) || randomUUID();
+
+  req.request_id = requestId;
+  res.setHeader('x-request-id', requestId);
+
+  // Child logger bound to request_id so every log line carries it.
+  req.log = logger.child({ request_id: requestId });
+
+  const start = Date.now();
+  res.on('finish', () => {
+    req.log?.info(
+      {
+        method: req.method,
+        url: req.originalUrl,
+        status: res.statusCode,
+        duration_ms: Date.now() - start,
+      },
+      'http request completed',
+    );
+  });
+
+  next();
+});
+=======
 
 // ── In-Flight Request Tracking & Graceful Shutdown (#698) ────────────────────
 
@@ -53,7 +95,10 @@ export async function gracefulShutdown(
   const startTime = Date.now();
   let abortedRequests = 0;
 
-  console.log(`[GracefulShutdown] Beginning graceful shutdown with ${timeoutMs}ms timeout. Stopping new tasks.`);
+  logger.info(
+    { timeout_ms: timeoutMs },
+    'graceful shutdown beginning; stopping new tasks',
+  );
 
   // Stop accepting new poll tasks on SIGTERM
   try {
@@ -85,14 +130,20 @@ export async function gracefulShutdown(
 
   if (activeRequestsCount > 0) {
     abortedRequests = activeRequestsCount;
-    console.warn(`[GracefulShutdown] Forced shutdown after timeout with ${abortedRequests} aborted requests.`);
+    logger.warn(
+      { aborted_requests: abortedRequests },
+      'forced shutdown after timeout with aborted requests',
+    );
   } else {
-    console.log('[GracefulShutdown] All in-flight requests and batches drained cleanly.');
+    logger.info('all in-flight requests and batches drained cleanly');
   }
 
   const durationSeconds = (Date.now() - startTime) / 1000;
   serverMetrics.indexer_graceful_shutdown_duration_seconds = durationSeconds;
-  console.log(`[GracefulShutdown] Clean shutdown completed in ${durationSeconds.toFixed(2)}s.`);
+  logger.info(
+    { duration_seconds: Number(durationSeconds.toFixed(2)) },
+    'clean shutdown completed',
+  );
 
   return { abortedRequests, durationSeconds };
 }
@@ -109,6 +160,7 @@ app.get('/healthz/live', (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    req.log?.error({ err }, 'liveness probe failed');
     res.status(500).json({ 
       status: 'error',
       error: err.message,
@@ -136,6 +188,7 @@ app.get('/healthz/ready', (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    req.log?.error({ err }, 'readiness probe failed');
     res.status(503).json({ 
       status: 'error',
       ready: false,
@@ -180,6 +233,7 @@ app.get('/health', (req: Request, res: Response) => {
       },
     });
   } catch (err: any) {
+    req.log?.error({ err }, 'health check failed');
     res.status(500).json({ 
       success: false, 
       status: 'error',
