@@ -9,6 +9,7 @@ import {
 } from '../services/wallet';
 import type { WalletType } from '../services/wallet';
 import { useAppStore } from '../store';
+import { useWalletStore } from '../store/walletStore';
 import { queryClient } from '../providers/QueryProvider';
 
 export interface UseWalletResult {
@@ -28,7 +29,12 @@ export interface UseWalletResult {
 const STORAGE_KEY = 'bankerchanger_wallet_address';
 
 export function useWallet(): UseWalletResult {
-  const { walletAddress, walletBalance, isConnecting, setWallet, clearWallet } = useAppStore();
+  const walletAddress = useWalletStore((state) => state.address);
+  const walletBalance = useWalletStore((state) => state.balance);
+  const isConnecting = useWalletStore((state) => state.isConnecting);
+  const setWallet = useAppStore((state) => state.setWallet);
+  const clearWallet = useAppStore((state) => state.clearWallet);
+  const setIsConnecting = useWalletStore((state) => state.setIsConnecting);
   const [error, setError] = useState<string | null>(null);
   const [availableWallets, setAvailableWallets] = useState<{ freighter: boolean; albedo: boolean }>({
     freighter: false,
@@ -39,13 +45,19 @@ export function useWallet(): UseWalletResult {
     disconnectWallet();
     sessionStorage.removeItem(STORAGE_KEY);
     clearWallet();
+    useAppStore.setState({ isConnecting: false });
     queryClient.resetQueries();
   }, [clearWallet]);
 
   useEffect(() => {
+    void useWalletStore.persist.rehydrate();
     const stored = getConnectedAddress();
     if (stored) {
-      getWalletBalance().then((bal) => setWallet(stored, bal)).catch(() => {});
+      getWalletBalance()
+        .then((bal) => {
+          setWallet(stored, bal);
+        })
+        .catch(() => {});
     }
     setAvailableWallets(detectWallets());
   }, [setWallet]);
@@ -96,6 +108,7 @@ export function useWallet(): UseWalletResult {
 
   const connect = useCallback(async () => {
     setError(null);
+    setIsConnecting(true);
     useAppStore.setState({ isConnecting: true });
     try {
       const address = await connectWallet();
@@ -105,12 +118,14 @@ export function useWallet(): UseWalletResult {
     } catch (e: any) {
       setError(e?.message ?? 'Failed to connect wallet');
     } finally {
+      setIsConnecting(false);
       useAppStore.setState({ isConnecting: false });
     }
-  }, [setWallet]);
+  }, [setIsConnecting, setWallet]);
 
   const connectByType = useCallback(async (type: WalletType) => {
     setError(null);
+    setIsConnecting(true);
     useAppStore.setState({ isConnecting: true });
     try {
       const address = await connectWalletByType(type);
@@ -120,9 +135,10 @@ export function useWallet(): UseWalletResult {
     } catch (e: any) {
       setError(e?.message ?? 'Failed to connect wallet');
     } finally {
+      setIsConnecting(false);
       useAppStore.setState({ isConnecting: false });
     }
-  }, [setWallet]);
+  }, [setIsConnecting, setWallet]);
 
   return {
     address: walletAddress,

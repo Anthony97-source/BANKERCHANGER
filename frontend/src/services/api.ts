@@ -182,6 +182,26 @@ export async function fetchPortfolio(address: string): Promise<Portfolio> {
   return apiFetch<Portfolio>(`/api/portfolio/${address}`);
 }
 
+export interface BetsPage {
+  bets: Bet[];
+  total?: number;
+  nextCursor: string | null;
+  limit: number;
+}
+
+/**
+ * Calls GET /api/bets/:bettor_address with cursor-based pagination.
+ */
+export async function fetchBetsByAddress(
+  address: string,
+  cursor: string | null,
+  limit: number,
+): Promise<BetsPage> {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (cursor) params.set('cursor', cursor);
+  return apiFetch<BetsPage>(`/api/bets/${address}?${params.toString()}`);
+}
+
 /**
  * Calls GET /api/markets/:market_id/stats.
  * Returns aggregate MarketStats.
@@ -303,6 +323,24 @@ export interface MarketOdds {
   fighter_b: OutcomeOdds;
   draw: OutcomeOdds;
   total_pool: string;
+}
+
+export interface OracleReport {
+  match_id: string;
+  oracle_address: string;
+  outcome: string;
+  timestamp: string;
+  signature: string;
+}
+
+/** GET /api/oracle/reports/:match_id — oracle reports ordered by report time */
+export async function fetchOracleReports(match_id: string): Promise<OracleReport[]> {
+  const result = await apiFetch<{ match_id: string; reports: OracleReport[] }>(
+    `/api/oracle/reports/${encodeURIComponent(match_id)}`,
+  );
+  return result.reports.sort(
+    (left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp),
+  );
 }
 
 /** GET /api/markets/:market_id/odds — live parimutuel odds for a market */

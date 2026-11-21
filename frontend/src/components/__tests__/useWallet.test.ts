@@ -5,18 +5,21 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useWallet } from '../../hooks/useWallet';
 import { useAppStore } from '../../store';
+import { useWalletStore } from '../../store/walletStore';
 
 // Mock wallet service
 const mockConnectWallet = jest.fn<() => Promise<string>>();
 const mockDisconnectWallet = jest.fn<() => void>();
 const mockGetConnectedAddress = jest.fn<() => string | null>();
 const mockGetWalletBalance = jest.fn<() => Promise<number>>();
+const mockDetectWallets = jest.fn<() => { freighter: boolean; albedo: boolean }>();
 
 jest.mock('../../services/wallet', () => ({
   connectWallet: () => mockConnectWallet(),
   disconnectWallet: () => mockDisconnectWallet(),
   getConnectedAddress: () => mockGetConnectedAddress(),
   getWalletBalance: () => mockGetWalletBalance(),
+  detectWallets: () => mockDetectWallets(),
 }));
 
 const STORAGE_KEY = 'bankerchanger_wallet_address';
@@ -31,8 +34,15 @@ describe('useWallet', () => {
       walletBalance: null,
       isConnecting: false,
     });
+    useWalletStore.setState({
+      address: null,
+      balance: null,
+      isConnected: false,
+      isConnecting: false,
+    });
     mockGetConnectedAddress.mockReturnValue(null);
     mockGetWalletBalance.mockResolvedValue(100);
+    mockDetectWallets.mockReturnValue({ freighter: false, albedo: false });
     mockDisconnectWallet.mockReturnValue(undefined);
   });
 
@@ -48,6 +58,30 @@ describe('useWallet', () => {
   });
 
   describe('connection persistence across page refreshes', () => {
+    it('rehydrates the persisted wallet store on mount', async () => {
+      localStorage.setItem(
+        'bankerchanger-wallet',
+        JSON.stringify({
+          state: {
+            address: 'GRESTORED',
+            balance: 42,
+            isConnected: true,
+            isConnecting: false,
+            networkId: 'testnet',
+          },
+          version: 0,
+        }),
+      );
+
+      const { result } = renderHook(() => useWallet());
+
+      await waitFor(() => {
+        expect(result.current.address).toBe('GRESTORED');
+      });
+      expect(result.current.balance).toBe(42);
+      expect(result.current.isConnected).toBe(true);
+    });
+
     it('restores address and fetches balance from localStorage on mount', async () => {
       mockGetConnectedAddress.mockReturnValue('GABC123');
       mockGetWalletBalance.mockResolvedValue(42);
@@ -111,7 +145,8 @@ describe('useWallet', () => {
 
       await act(async () => { await result.current.connect(); });
 
-      expect(localStorage.getItem(STORAGE_KEY)).toBe('GABC123');
+      const persisted = JSON.parse(localStorage.getItem('bankerchanger-wallet') ?? '{}');
+      expect(persisted.state.address).toBe('GABC123');
     });
 
     it('sets error and clears isConnecting on connect failure', async () => {

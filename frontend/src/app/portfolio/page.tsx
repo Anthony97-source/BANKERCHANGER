@@ -8,7 +8,7 @@ import { useMemo, useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useWallet } from '../../hooks/useWallet';
-import { usePortfolio } from '../../hooks/usePortfolio';
+import { usePortfolio } from '../../hooks/queries/usePortfolio';
 import { useMarkets } from '../../hooks/useMarkets';
 import { ConnectPrompt } from '../../components/ui/ConnectPrompt';
 import { BetHistoryTable } from '../../components/bet/BetHistoryTable';
