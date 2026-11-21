@@ -5,6 +5,7 @@ import { requireAdmin } from '../middleware/admin.middleware';
 import { AppError } from '../utils/AppError';
 import { pool } from '../config/db';
 import { redis } from '../config/redis';
+import { dbConnections } from '../services/metrics.service';
 import {
   healthCheckQuery,
   systemDiagnosticsQuery,
@@ -161,6 +162,19 @@ const detailedHealthHandler = async (req: Request, res: Response, next: NextFunc
 
     const statusCode = overallStatus === 'healthy' ? 200 : 503;
 
+    dbConnections.set(
+      { state: 'total' },
+      pool.totalCount,
+    );
+    dbConnections.set(
+      { state: 'idle' },
+      pool.idleCount,
+    );
+    dbConnections.set(
+      { state: 'waiting' },
+      pool.waitingCount,
+    );
+
     res.status(statusCode).json({
       status: overallStatus,
       components: results,
@@ -299,6 +313,10 @@ router.get(
       }
 
       if (q.includeConnections) {
+        dbConnections.set({ state: 'total' }, pool.totalCount);
+        dbConnections.set({ state: 'idle' }, pool.idleCount);
+        dbConnections.set({ state: 'waiting' }, pool.waitingCount);
+
         diagnostics.connections = {
           database: {
             totalCount: pool.totalCount,

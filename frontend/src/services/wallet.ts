@@ -30,20 +30,8 @@ export const NETWORK_PASSPHRASE =
 const WALLET_STORAGE_KEY = 'bankerchanger_wallet_address';
 
 /**
- * Storage Decision: sessionStorage vs localStorage
- * 
- * TRADE-OFF: Using sessionStorage instead of localStorage for wallet address.
- * 
- * sessionStorage benefits:
- *  - Auto-clears when tab/browser closes (security on shared/public devices)
- *  - Wallet connection cannot persist after logout or browser restart
- *  - Prevents token theft if device is compromised between sessions
- * 
- * Downside:
- *  - Users must reconnect wallet if they refresh the page or open a new tab
- * 
- * This choice prioritizes security on shared devices over convenience.
- * For public/shared computers, indefinite persistence is a significant risk.
+ * This session-scoped key tracks the wallet provider's selected account.
+ * The wallet store separately persists the app's public wallet state.
  */
 
 // ─── Custom Errors ───────────────────────────────────────────────────────────

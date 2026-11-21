@@ -42,6 +42,7 @@ export function WalletButton(): JSX.Element {
   const [showWalletPicker, setShowWalletPicker] = useState(false);
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const onMouse = (e: MouseEvent) => {
@@ -52,8 +53,11 @@ export function WalletButton(): JSX.Element {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        const wasOpen = open || showWalletPicker;
         setOpen(false);
         setShowWalletPicker(false);
+        // Return focus to the trigger so keyboard users are not stranded.
+        if (wasOpen) triggerRef.current?.focus();
       }
     };
     document.addEventListener('mousedown', onMouse);
@@ -62,7 +66,7 @@ export function WalletButton(): JSX.Element {
       document.removeEventListener('mousedown', onMouse);
       document.removeEventListener('keydown', onKey);
     };
-  }, []);
+  }, [open, showWalletPicker]);
 
   const bothInstalled = availableWallets.freighter && availableWallets.albedo;
   const freighterMissing = !availableWallets.freighter;
@@ -80,11 +84,18 @@ export function WalletButton(): JSX.Element {
   if (!isConnected) {
     return (
       <div className="relative" ref={ref}>
+        {/* Live region announces connection state changes to screen readers */}
+        <span role="status" aria-live="polite" className="sr-only">
+          {isConnecting ? 'Connecting wallet, please wait' : ''}
+        </span>
         <button
+          ref={triggerRef}
+          type="button"
           onClick={handleConnectClick}
           disabled={isConnecting}
-          aria-label="Connect wallet"
-          className="min-h-[44px] px-4 rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black text-sm disabled:opacity-50"
+          aria-label={isConnecting ? 'Connecting wallet, please wait' : 'Connect wallet'}
+          aria-busy={isConnecting}
+          className="min-h-[44px] px-4 rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black text-sm disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 focus-visible:ring-amber-300"
         >
           {isConnecting ? (
             <span className="flex items-center gap-2">
@@ -125,9 +136,10 @@ export function WalletButton(): JSX.Element {
                   href="https://freighter.app"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-block px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-semibold rounded-lg"
+                  className="inline-block px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-semibold rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 focus-visible:ring-amber-300"
                 >
                   Install Freighter
+                  <span className="sr-only"> (opens in a new tab)</span>
                 </a>
               </div>
             )}
@@ -139,9 +151,10 @@ export function WalletButton(): JSX.Element {
 
               {availableWallets.freighter && (
                 <button
+                  type="button"
                   aria-label="Connect Freighter wallet"
                   onClick={() => { setShowWalletPicker(false); connectByType('freighter'); }}
-                  className="w-full min-h-[44px] px-3 text-left text-sm text-gray-200 hover:bg-gray-800 rounded-lg flex items-center gap-3"
+                  className="w-full min-h-[44px] px-3 text-left text-sm text-gray-200 hover:bg-gray-800 rounded-lg flex items-center gap-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
                 >
                   <FreighterIcon />
                   Freighter
@@ -149,9 +162,10 @@ export function WalletButton(): JSX.Element {
               )}
 
               <button
+                type="button"
                 aria-label="Connect Albedo wallet"
                 onClick={() => { setShowWalletPicker(false); connectByType('albedo'); }}
-                className="w-full min-h-[44px] px-3 text-left text-sm text-gray-200 hover:bg-gray-800 rounded-lg flex items-center gap-3"
+                className="w-full min-h-[44px] px-3 text-left text-sm text-gray-200 hover:bg-gray-800 rounded-lg flex items-center gap-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
               >
                 <AlbedoIcon />
                 Albedo
@@ -159,9 +173,10 @@ export function WalletButton(): JSX.Element {
             </div>
 
             <button
+              type="button"
               aria-label="Cancel wallet selection"
               onClick={() => setShowWalletPicker(false)}
-              className="w-full min-h-[40px] px-4 text-center text-xs text-gray-500 hover:bg-gray-800 border-t border-gray-800"
+              className="w-full min-h-[40px] px-4 text-center text-xs text-gray-300 hover:bg-gray-800 border-t border-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
             >
               Cancel
             </button>
@@ -181,22 +196,29 @@ export function WalletButton(): JSX.Element {
 
   return (
     <div className="relative" ref={ref}>
+      {/* Live region announces copy confirmation and connection state */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {copied ? 'Address copied to clipboard' : ''}
+      </span>
       <button
+        ref={triggerRef}
+        type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label={`Wallet menu for ${address ?? 'connected wallet'}`}
+        aria-label={`Wallet menu for ${address ?? 'connected wallet'}, balance ${balance != null ? `${balance.toFixed(2)} XLM` : 'unavailable'}`}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="min-h-[44px] px-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm text-white flex items-center gap-2"
+        className="min-h-[44px] px-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm text-white flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 focus-visible:ring-amber-300"
       >
         <span className="font-mono">{short}</span>
-        {balance != null && <span className="text-gray-400 text-xs">{balance.toFixed(2)} XLM</span>}
+        {balance != null && <span className="text-gray-300 text-xs">{balance.toFixed(2)} XLM</span>}
       </button>
       {open && (
         <div role="menu" className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-50 overflow-hidden">
           <button
+            type="button"
             role="menuitem"
             onClick={handleCopy}
-            className="w-full min-h-[44px] px-4 text-left text-sm text-gray-300 hover:bg-gray-800"
+            className="w-full min-h-[44px] px-4 text-left text-sm text-gray-300 hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
           >
             {copied ? 'Copied!' : 'Copy Address'}
           </button>
@@ -206,14 +228,16 @@ export function WalletButton(): JSX.Element {
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setOpen(false)}
-            className="flex items-center min-h-[44px] px-4 text-sm text-gray-300 hover:bg-gray-800"
+            className="flex items-center min-h-[44px] px-4 text-sm text-gray-300 hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
           >
             View on Explorer
+            <span className="sr-only"> (opens in a new tab)</span>
           </a>
           <button
+            type="button"
             role="menuitem"
             onClick={() => { disconnect(); setOpen(false); }}
-            className="w-full min-h-[44px] px-4 text-left text-sm text-red-400 hover:bg-gray-800"
+            className="w-full min-h-[44px] px-4 text-left text-sm text-red-400 hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
           >
             Disconnect
           </button>

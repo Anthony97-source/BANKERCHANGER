@@ -49,7 +49,9 @@ export function BetConfirmModal({
   status: externalStatus,
 }: BetConfirmModalProps): JSX.Element {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const feeHintId = useId();
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const [internalStatus, setInternalStatus] = useState<BetSubmissionStep>('idle');
   const isSubmittingRef = useRef(false);
 
@@ -67,6 +69,10 @@ export function BetConfirmModal({
   useEffect(() => {
     if (!isOpen) return;
 
+    // Remember the element that opened the dialog so focus can be restored on close.
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
     const onKey = (e: KeyboardEvent) => {
       // Prevent Escape modal dismissal while transaction is in flight
       if (e.key === 'Escape') {
@@ -76,17 +82,19 @@ export function BetConfirmModal({
         return;
       }
       if (e.key !== 'Tab' || !dialogRef.current) return;
-      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true'
+      );
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (e.shiftKey) {
-        if (document.activeElement === first) {
+        if (document.activeElement === first || !dialogRef.current.contains(document.activeElement)) {
           e.preventDefault();
           last.focus();
         }
       } else {
-        if (document.activeElement === last) {
+        if (document.activeElement === last || !dialogRef.current.contains(document.activeElement)) {
           e.preventDefault();
           first.focus();
         }
@@ -97,7 +105,15 @@ export function BetConfirmModal({
     const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE);
     firstFocusable?.focus();
 
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      // Return focus to the trigger element when the dialog closes.
+      const previous = previouslyFocusedRef.current;
+      if (previous && document.contains(previous)) {
+        previous.focus();
+      }
+      previouslyFocusedRef.current = null;
+    };
   }, [isOpen, isInFlight, onCancel]);
 
   if (!isOpen) return <></>;
@@ -140,7 +156,7 @@ export function BetConfirmModal({
       onClick={handleBackdropClick}
       aria-modal="true"
       role="dialog"
-      aria-labelledby="bet-confirm-title"
+      aria-labelledby={titleId}
       aria-describedby={feeHintId}
     >
       <div
@@ -148,7 +164,7 @@ export function BetConfirmModal({
         className="bg-gray-900 rounded-xl p-6 w-full max-w-sm mx-4 space-y-4 text-white"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 id="bet-confirm-title" className="text-lg font-bold">
+        <h2 id={titleId} className="text-lg font-bold">
           Confirm your bet
         </h2>
 
@@ -219,17 +235,20 @@ export function BetConfirmModal({
 
         <div className="flex gap-3 pt-2">
           <button
+            type="button"
             onClick={onCancel}
             disabled={isInFlight}
-            className="flex-1 min-h-[44px] rounded-lg border border-gray-600 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 min-h-[44px] rounded-lg border border-gray-600 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleConfirmClick}
             disabled={isInFlight}
             data-testid="confirm-bet-button"
-            className="flex-1 min-h-[44px] rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            aria-busy={isInFlight}
+            className="flex-1 min-h-[44px] rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900"
           >
             {isInFlight ? (
               <>

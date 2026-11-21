@@ -9,7 +9,7 @@ import { logger } from '../utils/logger';
 
 export { redis };
 
-import { cacheMissesTotal } from './metrics.service';
+import { cacheHitsTotal, cacheMissesTotal } from './metrics.service';
 
 /**
  * Get a value from cache by key.
@@ -18,7 +18,11 @@ import { cacheMissesTotal } from './metrics.service';
 export async function get<T>(key: string): Promise<T | null> {
   try {
     const data = await redis.get(key);
-    return data ? (JSON.parse(data) as T) : null;
+    if (data) {
+      cacheHitsTotal.inc();
+      return JSON.parse(data) as T;
+    }
+    return null;
   } catch (err) {
     logger.warn({ err, key }, 'cache.get: Redis unavailable, bypassing cache');
     cacheMissesTotal.inc({ reason: 'redis_unavailable' });
@@ -86,6 +90,7 @@ export async function getOrSet<T>(
     // Try to get from cache first
     const cached = await get<T>(key);
     if (cached !== null) {
+      cacheHitsTotal.inc();
       return cached;
     }
 

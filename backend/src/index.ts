@@ -26,6 +26,7 @@ import governanceRouter from "./routes/governance.routes";
 import usersRouter from "./routes/users.routes";
 import adminRouter from "./routes/admin.routes";
 import operationsRouter from "./routes/operations.routes";
+import { register, httpRequestDuration, httpRequestsTotal } from "./services/metrics.service";
 
 import disputesRouter from "./routes/disputes.routes";
 import oracleRouter from "./routes/oracle.routes";

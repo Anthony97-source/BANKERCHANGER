@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import type { TxStatus } from '../types';
+import { useWalletStore } from './walletStore';
 
 export type Network = 'testnet' | 'mainnet';
 
@@ -62,11 +63,22 @@ export const useAppStore = create<AppState>()(
       network: (process.env.NEXT_PUBLIC_STELLAR_NETWORK as Network) ?? 'testnet',
       lastTxStatus: { hash: null, status: 'idle', error: null },
 
-      setWallet: (address, balance) => set({ walletAddress: address, walletBalance: balance }),
-      clearWallet: () => set({ walletAddress: null, walletBalance: null }),
-      setNetwork: (network) => set({ network }),
+      setWallet: (address, balance) => {
+        useWalletStore.getState().setWallet(address, balance);
+        set({ walletAddress: address, walletBalance: balance });
+      },
+      clearWallet: () => {
+        useWalletStore.getState().disconnect();
+        set({ walletAddress: null, walletBalance: null });
+      },
+      setNetwork: (network) => {
+        useWalletStore.getState().setNetworkId(network);
+        set({ network });
+      },
       setTxStatus: (status) => set({ lastTxStatus: status }),
     }),
     { name: 'BankERCHANGERAppStore' },
   ),
 );
+
+export { useWalletStore };

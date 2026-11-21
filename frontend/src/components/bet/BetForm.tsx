@@ -52,9 +52,19 @@ export function BetForm({ market }: BetFormProps): JSX.Element {
   const [side, setSide] = useState<BetSide | null>(null);
   const [amount, setAmount] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [touched, setTouched] = useState(false);
 
   const amountNum = parseFloat(amount);
   const isAmountValid = !isNaN(amountNum) && amountNum > 0 && amountNum >= 1;
+
+  const amountError = useMemo(() => {
+    if (!touched || amount.trim() === '') return null;
+    if (isNaN(amountNum)) return 'Enter a valid number for the amount.';
+    if (amountNum < 1) return 'Minimum bet is 1 XLM.';
+    return null;
+  }, [touched, amount, amountNum]);
+
+  const sideError = touched && !side ? 'Select an outcome before placing your bet.' : null;
 
   const projectedPayout = useMemo(() => {
     if (!side) return null;
@@ -93,13 +103,20 @@ export function BetForm({ market }: BetFormProps): JSX.Element {
   return (
     <div className="rounded-xl bg-gray-900 p-6 space-y-4 text-white">
       {/* Side selector */}
-      <div className="flex gap-2">
+      <fieldset
+        className="flex gap-2"
+        aria-describedby={sideError ? 'bet-side-error' : undefined}
+      >
+        <legend className="sr-only">Select outcome</legend>
         {SIDES.map(({ value, label }) => (
           <button
             key={value}
+            type="button"
             onClick={() => setSide(value)}
+            onBlur={() => setTouched(true)}
             disabled={isSubmitting}
-            className={`flex-1 min-h-[44px] rounded-lg text-sm font-semibold transition-colors ${
+            aria-pressed={side === value}
+            className={`flex-1 min-h-[44px] rounded-lg text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 ${
               side === value
                 ? 'bg-amber-500 text-black'
                 : 'bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50'
@@ -108,22 +125,42 @@ export function BetForm({ market }: BetFormProps): JSX.Element {
             {label(market.fighter_a, market.fighter_b)}
           </button>
         ))}
-      </div>
+      </fieldset>
+      {sideError && (
+        <p id="bet-side-error" role="alert" className="text-xs text-red-400">
+          {sideError}
+        </p>
+      )}
 
       {/* Amount input */}
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Amount (XLM)</label>
+        <label htmlFor="bet-amount" className="block text-xs text-gray-400 mb-1">
+          Amount (XLM)
+        </label>
         <input
+          id="bet-amount"
           type="number"
           min="1"
           step="0.01"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
+          onBlur={() => setTouched(true)}
           placeholder="0.00"
           disabled={isSubmitting}
-          className="w-full bg-gray-800 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
+          aria-invalid={amountError ? true : undefined}
+          aria-describedby={amountError ? 'bet-amount-error bet-amount-hint' : 'bet-amount-hint'}
+          className={`w-full bg-gray-800 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 disabled:opacity-50 ${
+            amountError ? 'ring-2 ring-red-500 focus:ring-red-500' : 'focus:ring-amber-500'
+          }`}
         />
-        <p className="text-xs text-gray-500 mt-1">Min: 1 XLM</p>
+        <p id="bet-amount-hint" className="text-xs text-gray-500 mt-1">
+          Min: 1 XLM
+        </p>
+        {amountError && (
+          <p id="bet-amount-error" role="alert" className="text-xs text-red-400 mt-1">
+            {amountError}
+          </p>
+        )}
       </div>
 
       {/* Payout preview */}
@@ -140,9 +177,11 @@ export function BetForm({ market }: BetFormProps): JSX.Element {
 
       {/* Submit button */}
       <button
+        type="button"
         disabled={!canSubmit}
         onClick={handleSubmit}
-        className="w-full min-h-[44px] rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        aria-busy={isSubmitting}
+        className="w-full min-h-[44px] rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900"
       >
         {isSubmitting ? 'Placing Bet…' : 'Place Bet'}
       </button>

@@ -9,8 +9,12 @@ services:
       POSTGRES_DB: bankerchanger_test
     ports:
       - '5433:5432'
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    networks:
+      - test-network
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U bankerchanger']
+      test: ['CMD-SHELL', 'pg_isready -U bankerchanger -d bankerchanger_test']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -19,6 +23,8 @@ services:
     image: redis:7-alpine
     ports:
       - '6380:6379'
+    networks:
+      - test-network
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
@@ -31,9 +37,39 @@ services:
     command: node -e "const http = require('http'); http.createServer((req, res) => { res.writeHead(200, {'Content-Type': 'application/json'}); res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { status: 'SUCCESS' } })); }).listen(8000, () => console.log('Mock Soroban RPC listening on port 8000'));"
     ports:
       - '8000:8000'
+    networks:
+      - test-network
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://localhost:8000/']
       interval: 5s
       timeout: 3s
       retries: 5
 
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      postgres_test:
+        condition: service_healthy
+      redis_test:
+        condition: service_healthy
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://bankerchanger:bankerchanger@postgres_test:5432/bankerchanger_test
+      REDIS_URL: redis://redis_test:6379
+      SOROBAN_RPC_URL: http://mock_soroban_rpc:8000
+    networks:
+      - test-network
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - >
+        npm run migrate &&
+        node scripts/e2e-cleanup.js &&
+        npm run test:e2e
+
+networks:
+  test-network:
+    driver: bridge
+
+volumes:
+  postgres_test_data:

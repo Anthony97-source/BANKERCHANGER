@@ -2,6 +2,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useWallet } from '../useWallet';
 import * as walletService from '../../services/wallet';
 import { useAppStore } from '../../store';
+import { useWalletStore } from '../../store/walletStore';
 import { queryClient } from '../../providers/QueryProvider';
 
 jest.mock('../../services/wallet');
@@ -20,6 +21,12 @@ describe('useWallet hook', () => {
       walletBalance: null,
       isConnecting: false,
     });
+    useWalletStore.setState({
+      address: null,
+      balance: null,
+      isConnected: false,
+      isConnecting: false,
+    });
     (walletService.detectWallets as jest.Mock).mockReturnValue({
       freighter: true,
       albedo: false,
@@ -36,7 +43,7 @@ describe('useWallet hook', () => {
     (walletService.getWalletBalance as jest.Mock).mockResolvedValue(250);
 
     // Initial state with old account
-    useAppStore.setState({ walletAddress: 'OLD_ACCOUNT_456' });
+    useWalletStore.setState({ address: 'OLD_ACCOUNT_456', isConnected: true });
 
     renderHook(() => useWallet());
 
@@ -45,7 +52,7 @@ describe('useWallet hook', () => {
       window.dispatchEvent(new Event('focus'));
     });
 
-    expect(useAppStore.getState().walletAddress).toBe('NEW_ACCOUNT_123');
+    expect(useWalletStore.getState().address).toBe('NEW_ACCOUNT_123');
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['portfolio'] });
   });
 
@@ -56,7 +63,7 @@ describe('useWallet hook', () => {
     };
     (window as any).freighter = mockFreighter;
 
-    useAppStore.setState({ walletAddress: 'CONNECTED_ACCOUNT' });
+    useWalletStore.setState({ address: 'CONNECTED_ACCOUNT', isConnected: true });
 
     const { result } = renderHook(() => useWallet());
 
@@ -65,7 +72,7 @@ describe('useWallet hook', () => {
     });
 
     expect(walletService.disconnectWallet).toHaveBeenCalled();
-    expect(useAppStore.getState().walletAddress).toBeNull();
+    expect(useWalletStore.getState().address).toBeNull();
     expect(queryClient.resetQueries).toHaveBeenCalled();
   });
 });

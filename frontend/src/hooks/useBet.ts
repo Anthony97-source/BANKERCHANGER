@@ -10,6 +10,7 @@ import {
   WALLET_TRANSACTION_CANCELLED_MESSAGE,
 } from '../services/wallet';
 import { useAppStore } from '../store';
+import { useWalletStore } from '../store/walletStore';
 import { useToast } from '../components/ui/ToastProvider';
 
 export interface UseBetResult {
@@ -45,7 +46,8 @@ export function useBet(market: Market): UseBetResult {
   const [amount, setAmount] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { lastTxStatus, setTxStatus, walletAddress } = useAppStore();
+  const { lastTxStatus, setTxStatus } = useAppStore();
+  const walletAddress = useWalletStore((state) => state.address);
   const toast = useToast();
 
   const estimatedPayout = useMemo(() => {

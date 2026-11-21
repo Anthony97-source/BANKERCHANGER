@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Bet, Market } from '../../types';
 import { useWallet } from '../../hooks/useWallet';
-import { useClaimWinnings } from '../../hooks/useClaimWinnings';
+import { useClaimWinnings } from '../../hooks/mutations/useClaimWinnings';
 import { TransactionStatus } from '../ui/TransactionStatus';
 import { stellarExplorerUrl } from '../../services/wallet';
 
@@ -58,11 +58,25 @@ export function ClaimWinningsPanel({ market, allBets }: ClaimWinningsPanelProps)
 
   const success = txStatus.status === 'success';
   const isPending = ['signing', 'broadcasting', 'confirming'].includes(txStatus.status);
+  const isError = txStatus.status === 'error';
+
+  const claimButtonRef = useRef<HTMLButtonElement | null>(null);
+  const successRef = useRef<HTMLParagraphElement | null>(null);
 
   // Reset error/success if market changes away from resolved.
   useEffect(() => {
     if (!marketResolved) reset();
   }, [marketResolved, reset]);
+
+  // Move focus to the success message once the claim completes so keyboard and
+  // screen reader users are informed of the outcome.
+  useEffect(() => {
+    if (success) successRef.current?.focus();
+  }, [success]);
+
+  const statusMessageId = 'claim-winnings-status';
+  const errorMessageId = 'claim-winnings-error';
+  const describedBy = isError ? `${statusMessageId} ${errorMessageId}` : statusMessageId;
 
   return (
     <section className="bg-gray-900 rounded-xl p-6 space-y-4 text-white border border-gray-800">
@@ -96,7 +110,7 @@ export function ClaimWinningsPanel({ market, allBets }: ClaimWinningsPanelProps)
           </div>
         </div>
 
-        <div className="text-xs text-gray-500">
+        <div id={statusMessageId} className="text-xs text-gray-400">
           {marketResolved
             ? alreadyClaimed
               ? 'You have already claimed your winnings for this market.'
@@ -111,27 +125,43 @@ export function ClaimWinningsPanel({ market, allBets }: ClaimWinningsPanelProps)
       <div className="space-y-2">
         {!success ? (
           <button
+            ref={claimButtonRef}
+            type="button"
             disabled={!canClaim}
             onClick={() => claimWinnings(market.market_id)}
-            className="w-full min-h-[44px] rounded-xl bg-amber-500 hover:bg-amber-400 font-semibold text-black disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-describedby={describedBy}
+            aria-busy={isPending}
+            className="w-full min-h-[44px] rounded-xl bg-amber-500 hover:bg-amber-400 font-semibold text-black disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900"
           >
             {isPending ? 'Claiming…' : 'Claim winnings'}
           </button>
         ) : (
           <div className="flex items-center justify-between gap-3">
-            <p className="text-green-400 font-semibold">Claimed!</p>
+            <p
+              ref={successRef}
+              tabIndex={-1}
+              role="status"
+              className="text-green-400 font-semibold focus:outline-none"
+            >
+              Claimed!
+            </p>
             {txStatus.hash && (
               <a
                 href={stellarExplorerUrl('tx', txStatus.hash)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-amber-400 underline text-xs font-semibold break-all"
+                className="text-amber-400 underline text-xs font-semibold break-all focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded"
               >
-                View TX ↗
+                View TX ↗<span className="sr-only"> (opens in a new tab)</span>
               </a>
             )}
           </div>
         )}
+
+        {/* Live region announcing claim errors, associated with the action button */}
+        <div id={errorMessageId} role="alert" aria-live="assertive" className="sr-only">
+          {isError ? txStatus.message ?? 'Claim failed. Please try again.' : ''}
+        </div>
 
         {/* TransactionStatus during/after claim (single place) */}
         {txStatus.status !== 'idle' && <TransactionStatus txStatus={txStatus} onDismiss={reset} />}

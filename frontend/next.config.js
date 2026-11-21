@@ -6,6 +6,7 @@ if (!process.env.NEXT_PUBLIC_API_URL) {
 }
 
 const nextConfig = {
+  output: 'standalone',
   async headers() {
     const isProd = process.env.NODE_ENV === 'production';
     const scriptSrc = isProd ? "'self' 'unsafe-inline'" : "'self' 'unsafe-inline' 'unsafe-eval'";

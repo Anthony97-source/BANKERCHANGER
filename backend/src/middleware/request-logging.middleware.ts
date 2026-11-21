@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { requestContext } from '../utils/requestContext';
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
-import pinoHttp from 'pino-http';
+import { httpRequestDuration, httpRequestsTotal } from '../services/metrics.service';
 
 const SENSITIVE_PATHS = [
   '/auth/login',
@@ -24,9 +24,20 @@ export function requestLogging(req: Request, res: Response, next: NextFunction):
   const incomingId = req.get('x-request-id');
   const requestId = incomingId && incomingId.trim() ? incomingId.trim() : randomUUID();
 
-  // Expose the request id on the request and response for tracing.
-  (req as Request & { id?: string }).id = requestId;
-  res.setHeader('X-Request-Id', requestId);
+  // Record HTTP metrics on response finish
+  res.on('finish', () => {
+    const durationMs = Date.now() - startTime;
+    const route = req.route?.path || req.path;
+    const statusCode = String(res.statusCode);
+    httpRequestDuration.observe({ method, route, status_code: statusCode }, durationMs);
+    httpRequestsTotal.inc({ method, route, status_code: statusCode });
+  });
+
+  // Capture response end to log status and response time
+  const originalSend = res.send;
+  res.send = function (data: unknown) {
+    const responseTime = Date.now() - startTime;
+    const statusCode = res.statusCode;
 
   const isSensitive = SENSITIVE_PATHS.some((p) => req.path.startsWith(p));
 

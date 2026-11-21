@@ -16,12 +16,13 @@ import { ClaimWinningsPanel } from '../../../components/market/ClaimWinningsPane
 import { useToast } from '../../../components/ui/ToastProvider';
 import { MarketDetailSkeleton } from '../../../components/market/MarketDetailSkeleton';
 import type { Bet } from '../../../types';
+import { useWalletStore } from '../../../store/walletStore';
 
 export default function MarketDetailContent({ market_id }: { market_id: string }): JSX.Element {
   const { market, isLoading, error, isNotFound } = useMarket(market_id);
   const [recentBets, setRecentBets] = useState<Bet[]>([]);
   const [betsLoading, setBetsLoading] = useState(false);
-  const walletAddress = useAppStore((s) => s.walletAddress);
+  const walletAddress = useWalletStore((s) => s.address);
   const toast = useToast();
 
   useEffect(() => {

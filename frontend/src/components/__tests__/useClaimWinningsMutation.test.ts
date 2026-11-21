@@ -1,5 +1,5 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useClaimWinnings } from '../useClaimWinnings';
+import { useClaimWinnings } from '../../hooks/mutations/useClaimWinnings';
 import * as api from '../../services/api';
 import * as wallet from '../../services/wallet';
 
@@ -16,7 +16,7 @@ beforeEach(() => {
 
 test('AC #2 — does not submit when the bet is already claimed', async () => {
   (api.fetchBetsByMarket as jest.Mock).mockResolvedValue([
-    { market_id: marketId, address, claimed: true, payout: 100 },
+    { market_id: marketId, bettor_address: address, claimed: true, payout: 100 },
   ]);
 
   const { result } = renderHook(() => useClaimWinnings(address));
@@ -31,7 +31,7 @@ test('AC #2 — does not submit when the bet is already claimed', async () => {
 
 test('AC #1 — a second click during submit is a no-op', async () => {
   (api.fetchBetsByMarket as jest.Mock).mockResolvedValue([
-    { market_id: marketId, address, claimed: false },
+    { market_id: marketId, bettor_address: address, claimed: false },
   ]);
 
   let resolveSubmit: (hash: string) => void = () => {};
@@ -42,11 +42,17 @@ test('AC #1 — a second click during submit is a no-op', async () => {
   const { result } = renderHook(() => useClaimWinnings(address));
 
   // Fire two claims back-to-back in the same tick — the race the issue describes.
+  let firstClaim!: Promise<void>;
+  let secondClaim!: Promise<void>;
+  act(() => {
+    firstClaim = result.current.claimWinnings(marketId);
+    secondClaim = result.current.claimWinnings(marketId);
+  });
+  await waitFor(() => expect(wallet.submitClaimWithStages).toHaveBeenCalledTimes(1));
+
   await act(async () => {
-    const p1 = result.current.claimWinnings(marketId);
-    const p2 = result.current.claimWinnings(marketId);
     resolveSubmit('tx-hash');
-    await Promise.all([p1, p2]);
+    await Promise.all([firstClaim, secondClaim]);
   });
 
   expect(wallet.submitClaimWithStages).toHaveBeenCalledTimes(1);
@@ -54,7 +60,7 @@ test('AC #1 — a second click during submit is a no-op', async () => {
 
 test('submit proceeds for an unclaimed bet', async () => {
   (api.fetchBetsByMarket as jest.Mock).mockResolvedValue([
-    { market_id: marketId, address, claimed: false },
+    { market_id: marketId, bettor_address: address, claimed: false },
   ]);
 
   const { result } = renderHook(() => useClaimWinnings(address));
@@ -72,7 +78,7 @@ test('submit proceeds for an unclaimed bet', async () => {
 
 test('claim failure reverts state and does not leave button in claimed state', async () => {
   (api.fetchBetsByMarket as jest.Mock).mockResolvedValue([
-    { market_id: marketId, address, claimed: false },
+    { market_id: marketId, bettor_address: address, claimed: false },
   ]);
   (wallet.submitClaimWithStages as jest.Mock).mockRejectedValueOnce(
     new Error('Out of gas or contract error'),
