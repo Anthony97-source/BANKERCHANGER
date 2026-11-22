@@ -4,7 +4,6 @@ import {
     listMarketsValidation,
     getMarket,
     getMarketBets,
-    getMarketBetsValidation,
     getMarketOdds,
     streamMarketOdds,
     getMarketStats,
@@ -88,20 +87,17 @@ router.get('/:market_id', getMarket);
  *         schema:
  *           type: string
  *       - in: query
- *         name: page
+ *         name: address
+ *         description: Filter bets to a valid Stellar public key.
  *         schema:
- *           type: integer
- *           default: 1
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 20
+ *           type: string
  *     responses:
  *       200:
- *         description: Paginated list of bets
+ *         description: Bets for the market, or an empty array when none exist
+ *       400:
+ *         description: Invalid Stellar address format
  */
-router.get('/:market_id/bets', getMarketBetsValidation, getMarketBets);
+router.get('/:market_id/bets', getMarketBets);
 
 /**
  * @swagger

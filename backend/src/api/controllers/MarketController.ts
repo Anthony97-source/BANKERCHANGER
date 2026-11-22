@@ -105,37 +105,28 @@ export async function getMarket(
   }
 }
 
-const marketBetsQuerySchema = z.object({
-  address: z
-    .string()
-    .refine((v) => StrKey.isValidEd25519PublicKey(v), {
-      message: 'Invalid Stellar address format',
-    })
-    .optional(),
-});
-
 /**
  * GET /api/markets/:market_id/bets
  * Query params: address (optional — filter to one bettor)
  *
  * Returns all bets for a market.
- * Responds 404 if market not found, 200 with Bet[].
+ * Returns an empty array when the market has no bets, and responds 400 for an
+ * invalid Stellar address.
  */
-export const getMarketBetsValidation = validateQuery(marketBetsQuerySchema);
-
 export async function getMarketBets(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { market_id } = req.params;
-    const { address } = req.query;
+    const address = req.query.address;
 
     if (address !== undefined) {
       if (typeof address !== 'string' || !StrKey.isValidEd25519PublicKey(address)) {
-        throw AppError.badRequest('Invalid Stellar address format');
+        res.status(400).json({ error: 'Invalid Stellar address format' });
+        return;
       }
     }
 
-    const bets = await MarketService.getBetsByMarket(market_id, address as string | undefined);
-    res.json(bets);
+    const bets = await MarketService.getBetsByMarket(market_id, address);
+    res.status(200).json(bets);
   } catch (err) {
     next(err);
   }

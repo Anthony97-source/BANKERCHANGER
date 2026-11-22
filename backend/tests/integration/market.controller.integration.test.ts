@@ -162,6 +162,50 @@ describe('GET /api/markets/:id', () => {
   });
 });
 
+describe('GET /api/markets/:id/bets', () => {
+  it('returns all market bets when no address is provided', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([mockBet]);
+
+    const res = await request(app).get('/api/markets/market-1/bets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([mockBet]);
+    expect(MarketService.getBetsByMarket).toHaveBeenCalledWith('market-1', undefined);
+  });
+
+  it('filters bets by a valid Stellar address', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([mockBet]);
+
+    const res = await request(app).get(
+      `/api/markets/market-1/bets?address=${mockBet.bettor_address}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([mockBet]);
+    expect(MarketService.getBetsByMarket).toHaveBeenCalledWith(
+      'market-1',
+      mockBet.bettor_address,
+    );
+  });
+
+  it('returns 400 for an invalid Stellar address', async () => {
+    const res = await request(app).get('/api/markets/market-1/bets?address=invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Invalid Stellar address format' });
+    expect(MarketService.getBetsByMarket).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array when the market has no bets', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app).get('/api/markets/market-1/bets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
 describe('GET /api/markets/:id/odds', () => {
   it('returns 200 with market stats (odds)', async () => {
     (MarketService.getMarketStats as jest.Mock).mockResolvedValue(mockStats);
