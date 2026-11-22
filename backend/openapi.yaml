@@ -287,6 +287,7 @@ components:
         total_staked_xlm: { type: number }
         total_won_xlm: { type: number }
         total_lost_xlm: { type: number }
+        net_xlm: { type: number }
         win_rate: { type: number }
 
     Portfolio:
@@ -1774,7 +1775,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Portfolio summary
+          description: Portfolio summary with active bets in open/locked markets and past bets in resolved markets. Amount totals are in XLM; the result is cached for 30 seconds.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Portfolio' }

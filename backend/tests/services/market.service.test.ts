@@ -52,6 +52,25 @@ function makeMarket(overrides: Partial<Market> = {}): Market {
   };
 }
 
+function makeBet(overrides: Partial<Bet> = {}): Bet {
+  return {
+    id: 1,
+    market_id: 'mkt-1',
+    bettor_address: 'GAAA',
+    side: 'fighter_a',
+    amount: '0',
+    amount_xlm: 0,
+    odds_snapshot: null,
+    placed_at: new Date(),
+    claimed: false,
+    claimed_at: null,
+    payout: null,
+    tx_hash: 'tx-1',
+    ledger_sequence: 1,
+    ...overrides,
+  };
+}
+
 const MARKET_OPEN = makeMarket({ market_id: 'mkt-1', status: 'open' });
 const MARKET_RESOLVED = makeMarket({ market_id: 'mkt-2', status: 'resolved' });
 
@@ -132,6 +151,45 @@ describe('MarketService', () => {
     expect(portfolio.past_bets).toHaveLength(0);
     expect(portfolio.pending_claims).toHaveLength(0);
     expect(portfolio.total_staked_xlm).toBe(0);
+    expect(portfolio.net_xlm).toBe(0);
+  });
+
+  it('getPortfolioByAddress() returns resolved history, claimable wins, XLM totals, and caches for 30 seconds', async () => {
+    const bets = [
+      makeBet({ id: 1, market_id: 'open', amount: '20000000' }),
+      makeBet({ id: 2, market_id: 'locked', amount: '30000000' }),
+      makeBet({ id: 3, market_id: 'resolved-win', amount: '40000000' }),
+      makeBet({ id: 4, market_id: 'resolved-win', amount: '50000000', claimed: true, payout: '80000000' }),
+      makeBet({ id: 5, market_id: 'resolved-loss', amount: '60000000' }),
+      makeBet({ id: 6, market_id: 'cancelled', amount: '70000000' }),
+    ];
+    const markets = [
+      makeMarket({ market_id: 'open', status: 'open' }),
+      makeMarket({ market_id: 'locked', status: 'locked' }),
+      makeMarket({ market_id: 'resolved-win', status: 'resolved', outcome: 'fighter_a' }),
+      makeMarket({ market_id: 'resolved-loss', status: 'resolved', outcome: 'fighter_b' }),
+      makeMarket({ market_id: 'cancelled', status: 'cancelled' }),
+    ];
+    setDbAdapter({
+      findMarkets: jest.fn(),
+      findMarketById: jest.fn().mockImplementation((id: string) =>
+        Promise.resolve(markets.find((market) => market.market_id === id) ?? null),
+      ),
+      findBetsByAddress: jest.fn().mockResolvedValue(bets),
+      findBetsByMarket: jest.fn(),
+      updateMarketStatus: jest.fn(),
+    });
+
+    const portfolio = await getPortfolioByAddress('GAAA');
+
+    expect(portfolio.active_bets.map((bet) => bet.id)).toEqual([1, 2]);
+    expect(portfolio.past_bets.map((bet) => bet.id)).toEqual([3, 4, 5]);
+    expect(portfolio.pending_claims.map((bet) => bet.id)).toEqual([3]);
+    expect(portfolio.total_staked_xlm).toBe(27);
+    expect(portfolio.total_won_xlm).toBe(8);
+    expect(portfolio.total_lost_xlm).toBe(6);
+    expect(portfolio.net_xlm).toBe(2);
+    expect(cache.set).toHaveBeenCalledWith('portfolio:GAAA', portfolio, 30);
   });
 
   it('getPortfolioRoiByAddress() calculates ROI, resolved win rate, streak, and caches for 60 seconds', async () => {

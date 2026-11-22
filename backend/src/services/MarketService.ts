@@ -259,6 +259,7 @@ export interface Portfolio {
   total_staked_xlm: number;
   total_won_xlm: number;
   total_lost_xlm: number;
+  net_xlm: number;
   pending_claims: Bet[];
 }
 
@@ -742,13 +743,18 @@ export async function getMarketStats(market_id: string): Promise<MarketStats> {
  * Returns a portfolio summary for a Stellar address.
  *
  * active_bets:    bets in Open/Locked markets
- * past_bets:      bets in Resolved/Cancelled markets
+ * past_bets:      bets in Resolved markets
  * pending_claims: unclaimed winning bets in Resolved markets
  * Totals are computed in XLM (divide stroops by 10_000_000).
+ * Results are cached for 30 seconds.
  */
 export async function getPortfolioByAddress(
   bettor_address: string,
 ): Promise<Portfolio> {
+  const cacheKey = `portfolio:${bettor_address}`;
+  const cached = await cache.get<Portfolio>(cacheKey);
+  if (cached !== null) return cached;
+
   const bets = await db().findBetsByAddress(bettor_address);
   const marketIds = [...new Set(bets.map(b => b.market_id))];
   const markets = await Promise.all(marketIds.map(id => db().findMarketById(id)));
@@ -763,9 +769,9 @@ export async function getPortfolioByAddress(
     const status = market?.status;
     if (status === 'open' || status === 'locked') {
       active_bets.push(bet);
-    } else {
+    } else if (status === 'resolved') {
       past_bets.push(bet);
-      if (status === 'resolved' && !bet.claimed && market?.outcome === bet.side) {
+      if (!bet.claimed && market?.outcome === bet.side) {
         pending_claims.push(bet);
       }
     }
@@ -776,18 +782,22 @@ export async function getPortfolioByAddress(
     .filter(b => b.claimed && b.payout)
     .reduce((s, b) => s + Number(b.payout) / 10_000_000, 0);
   const total_lost_xlm = past_bets
-    .filter(b => !b.claimed && !pending_claims.includes(b))
+    .filter(b => marketMap.get(b.market_id)?.outcome !== b.side)
     .reduce((s, b) => s + Number(b.amount) / 10_000_000, 0);
 
-  return {
+  const portfolio: Portfolio = {
     address: bettor_address,
     active_bets,
     past_bets,
     total_staked_xlm,
     total_won_xlm,
     total_lost_xlm,
+    net_xlm: total_won_xlm - total_lost_xlm,
     pending_claims,
   };
+
+  await cache.set(cacheKey, portfolio, 30);
+  return portfolio;
 }
 
 /**
