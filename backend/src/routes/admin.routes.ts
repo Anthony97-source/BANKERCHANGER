@@ -79,7 +79,7 @@ router.get('/disputes', requireAdmin, async (req: Request, res: Response, next: 
  * @swagger
  * /admin/dispute/{market_id}:
  *   post:
- *     summary: Flag a market dispute (admin only)
+ *     summary: Dispute a resolved market (admin only)
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -89,11 +89,33 @@ router.get('/disputes', requireAdmin, async (req: Request, res: Response, next: 
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason:
+ *                 type: string
  *     responses:
  *       200:
- *         description: Dispute flagged
+ *         description: Market disputed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [tx_hash]
+ *               properties:
+ *                 tx_hash:
+ *                   type: string
  *       401:
  *         description: Unauthorized
+ *       403:
+ *         description: Admin role required
+ *       400:
+ *         description: Market is not resolved
  */
 router.post('/dispute/:market_id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {

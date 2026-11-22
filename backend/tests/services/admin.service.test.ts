@@ -20,13 +20,23 @@ jest.mock('@stellar/stellar-sdk', () => {
       sign: mockSign,
     }),
   };
+  const mockAddress = {
+    fromString: jest.fn((address: string) => ({
+      toScVal: jest.fn(() => `address:${address}`),
+    })),
+  };
   return {
+    Address: mockAddress,
     Keypair: mockKeypair,
     nativeToScVal: jest.fn((val: any) => val),
   };
 });
 
 jest.mock('../../src/services/cache.service', () => ({
+  get: jest.fn().mockResolvedValue(null),
+  set: jest.fn().mockResolvedValue(undefined),
+  del: jest.fn().mockResolvedValue(undefined),
+  delPattern: jest.fn().mockResolvedValue(undefined),
   cacheGet: jest.fn().mockResolvedValue(null),
   cacheSet: jest.fn().mockResolvedValue(undefined),
   cacheDelete: jest.fn().mockResolvedValue(undefined),
@@ -65,6 +75,8 @@ function makeMarket(overrides: Partial<Market> = {}): Market {
 
 // ── Mock pool.query ──────────────────────────────────────────────────────────
 let mockPoolQuery: jest.Mock;
+let mockUpdateMarketStatus: jest.Mock;
+const originalAdminAddress = process.env.ADMIN_ADDRESS;
 
 jest.mock('../../src/config/db', () => ({
   pool: {
@@ -95,14 +107,24 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (pool.query as jest.Mock).mockReset();
+    process.env.ADMIN_ADDRESS = 'GADMIN';
+    mockUpdateMarketStatus = jest.fn();
 
     setDbAdapter({
       findMarkets: jest.fn(),
       findMarketById: jest.fn().mockResolvedValue(makeMarket()),
       findBetsByAddress: jest.fn().mockResolvedValue([]),
       findBetsByMarket: jest.fn().mockResolvedValue([]),
-      updateMarketStatus: jest.fn(),
+      updateMarketStatus: mockUpdateMarketStatus,
     });
+  });
+
+  afterEach(() => {
+    if (originalAdminAddress === undefined) {
+      delete process.env.ADMIN_ADDRESS;
+    } else {
+      process.env.ADMIN_ADDRESS = originalAdminAddress;
+    }
   });
 
   describe('Phase 1: flagDispute', () => {
@@ -122,13 +144,9 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
 
       await flagDispute(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(201);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tx_hash: 'mock-tx-hash',
-          dispute: expect.objectContaining({ status: 'open', reason: 'Suspicious result' }),
-        }),
-      );
+      expect(mockUpdateMarketStatus).toHaveBeenCalledWith('mkt-dispute-1', 'disputed');
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ tx_hash: 'mock-tx-hash' });
     });
 
     it('throws 400 if reason is missing', async () => {

@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { Request, Response } from 'express';
-import { Keypair, nativeToScVal } from '@stellar/stellar-sdk';
+import { Address, Keypair, nativeToScVal } from '@stellar/stellar-sdk';
 import { AppError } from '../../utils/AppError';
 import * as StellarService from '../../services/StellarService';
 import * as BetService from '../../services/BetService';
@@ -91,7 +91,7 @@ const VALID_OUTCOMES = ['fighter_a', 'fighter_b', 'draw', 'no_contest'] as const
  *   4. Call StellarService.invokeContract("dispute_market", [admin, reason])
  *   5. Insert dispute record with status 'open'
  *   6. Update market status to 'disputed'
- *   7. Respond 200 with { tx_hash, dispute }
+ *   7. Respond 200 with { tx_hash }
  */
 export async function flagDispute(
   req: Request,
@@ -129,11 +129,11 @@ export async function flagDispute(
   const txHash = await StellarService.invokeContract(
     market.contract_address,
     'dispute_market',
-    [nativeToScVal(adminAddress), nativeToScVal(reason)],
+    [Address.fromString(adminAddress).toScVal(), nativeToScVal(reason)],
   );
 
   // Insert dispute record
-  const disputeResult = await pool.query(
+  await pool.query(
     `INSERT INTO disputes (market_id, reason, status, raised_at)
      VALUES ($1, $2, 'open', NOW())
      RETURNING *`,
@@ -142,10 +142,7 @@ export async function flagDispute(
 
   await updateMarketStatus(market_id, 'disputed');
 
-  res.status(201).json({
-    tx_hash: txHash,
-    dispute: disputeResult.rows[0],
-  });
+  res.status(200).json({ tx_hash: txHash });
 }
 
 /**
