@@ -32,6 +32,7 @@ import disputesRouter from "./routes/disputes.routes";
 import oracleRouter from "./routes/oracle.routes";
 import walletsRouter from "./routes/wallets.routes";
 import notificationsRouter from "./routes/notifications.routes";
+import leaderboardRouter from "./routes/leaderboard.routes";
 import engagementRouter from "./routes/engagement.routes";
 import { getPortfolio, getPlatformStats } from "./api/controllers/MarketController";
 import claimsRouter from "./routes/bet.routes";
@@ -165,6 +166,7 @@ app.use("/api/disputes", disputesRouter);
 app.use("/api/oracle", oracleRouter);
 app.use("/api/wallets", walletsRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/admin", adminRouter);
 app.use(operationsRouter);
 
