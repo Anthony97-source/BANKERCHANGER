@@ -361,7 +361,7 @@ export async function cancelMarket(
   const txHash = await StellarService.invokeContract(
     market.contract_address,
     'cancel_market',
-    [nativeToScVal(adminAddress), nativeToScVal(reason)],
+    [Address.fromString(adminAddress).toScVal(), nativeToScVal(reason)],
   );
 
   await updateMarketStatus(market_id, 'cancelled');
@@ -374,7 +374,7 @@ export async function cancelMarket(
     afterState: { status: 'cancelled' },
   });
 
-  res.json({ tx_hash: txHash });
+  res.status(200).json({ tx_hash: txHash });
 }
 
 /**

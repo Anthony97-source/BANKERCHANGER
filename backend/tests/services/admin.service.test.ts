@@ -1,5 +1,6 @@
-import { flagDispute, investigateDispute, resolveDispute, listDisputes } from '../../src/api/controllers/AdminController';
+import { cancelMarket, flagDispute, investigateDispute, resolveDispute, listDisputes } from '../../src/api/controllers/AdminController';
 import { setDbAdapter } from '../../src/services/MarketService';
+import { invokeContract } from '../../src/services/StellarService';
 import { AppError } from '../../src/utils/AppError';
 import type { Market } from '../../src/models/Market';
 
@@ -203,6 +204,53 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
       });
 
       await expect(flagDispute(req, res)).rejects.toMatchObject({ statusCode: 409 });
+    });
+  });
+
+  describe('Market cancellation', () => {
+    it('submits the reason, updates market status, and returns the confirmed transaction hash', async () => {
+      setDbAdapter({
+        findMarkets: jest.fn(),
+        findMarketById: jest.fn().mockResolvedValue(makeMarket({ status: 'locked' })),
+        findBetsByAddress: jest.fn().mockResolvedValue([]),
+        findBetsByMarket: jest.fn().mockResolvedValue([]),
+        updateMarketStatus: mockUpdateMarketStatus,
+      });
+      (pool.query as jest.Mock).mockResolvedValue({ rows: [] });
+
+      const { req, res } = mockReqRes({
+        params: { market_id: 'mkt-dispute-1' },
+        body: { reason: 'Event postponed' },
+      });
+
+      await cancelMarket(req, res);
+
+      expect(invokeContract).toHaveBeenCalledWith(
+        'C...',
+        'cancel_market',
+        ['address:GADMIN', 'Event postponed'],
+      );
+      expect(mockUpdateMarketStatus).toHaveBeenCalledWith('mkt-dispute-1', 'cancelled');
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ tx_hash: 'mock-tx-hash' });
+    });
+
+    it('rejects an already-cancelled market', async () => {
+      setDbAdapter({
+        findMarkets: jest.fn(),
+        findMarketById: jest.fn().mockResolvedValue(makeMarket({ status: 'cancelled' })),
+        findBetsByAddress: jest.fn().mockResolvedValue([]),
+        findBetsByMarket: jest.fn().mockResolvedValue([]),
+        updateMarketStatus: mockUpdateMarketStatus,
+      });
+
+      const { req, res } = mockReqRes({
+        params: { market_id: 'mkt-dispute-1' },
+        body: { reason: 'Event postponed' },
+      });
+
+      await expect(cancelMarket(req, res)).rejects.toMatchObject({ statusCode: 400 });
+      expect(invokeContract).not.toHaveBeenCalled();
     });
   });
 
