@@ -1794,6 +1794,48 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse500' }
 
+  /api/portfolio/{address}/roi:
+    get:
+      summary: Get portfolio ROI and resolved-bet performance
+      description: Returns ROI and win rate as percentages and the current streak as a signed bet count. Results are cached for 60 seconds.
+      operationId: getPortfolioRoi
+      tags: [ Bets ]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Portfolio ROI, resolved-bet win rate, and current streak
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ address, roi, win_rate, streak ]
+                properties:
+                  address: { type: string }
+                  roi: { type: number, description: ROI percentage }
+                  win_rate: { type: number, description: Percentage of resolved bets on the winning side }
+                  streak:
+                    type: integer
+                    description: "Positive for consecutive wins, negative for consecutive losses"
+        '400':
+          description: Invalid Stellar address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse400' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse429' }
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse500' }
+
   # ---------------------------------------------------------------------------
   # Governance
   # ---------------------------------------------------------------------------

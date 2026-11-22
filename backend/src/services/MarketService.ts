@@ -262,6 +262,13 @@ export interface Portfolio {
   pending_claims: Bet[];
 }
 
+export interface PortfolioRoi {
+  address: string;
+  roi: number;
+  win_rate: number;
+  streak: number;
+}
+
 export interface BettorStats {
   bettor_address: string;
   total_bets: number;
@@ -781,6 +788,63 @@ export async function getPortfolioByAddress(
     total_lost_xlm,
     pending_claims,
   };
+}
+
+/**
+ * Returns ROI and resolved-bet performance for an address.
+ * The result is cached for 60 seconds.
+ */
+export async function getPortfolioRoiByAddress(
+  bettor_address: string,
+): Promise<PortfolioRoi> {
+  const cacheKey = `portfolio:${bettor_address}:roi`;
+  const cached = await cache.get<PortfolioRoi>(cacheKey);
+  if (cached !== null) return cached;
+
+  const { rows } = await marketQuery(
+    `SELECT b.amount, b.payout, b.claimed, b.side,
+            m.status AS market_status, m.outcome, m.resolved_at, b.placed_at, b.id
+     FROM bets b
+     JOIN markets m ON b.market_id = m.market_id
+     WHERE b.bettor_address = $1
+     ORDER BY m.resolved_at DESC NULLS LAST, b.placed_at DESC, b.id DESC`,
+    [bettor_address],
+  );
+
+  const totalStaked = rows.reduce(
+    (total: number, bet: { amount: string }) => total + Number(bet.amount),
+    0,
+  );
+  const totalWon = rows.reduce(
+    (total: number, bet: { payout: string | null; claimed: boolean }) =>
+      total + (bet.claimed && bet.payout ? Number(bet.payout) : 0),
+    0,
+  );
+  const resolvedBets = rows.filter(
+    (bet: { market_status: string }) => bet.market_status === 'resolved',
+  );
+  const winCount = resolvedBets.filter(
+    (bet: { side: string; outcome: string | null }) => bet.side === bet.outcome,
+  ).length;
+
+  let streak = 0;
+  if (resolvedBets.length > 0) {
+    const firstBetWon = resolvedBets[0].side === resolvedBets[0].outcome;
+    for (const bet of resolvedBets) {
+      if ((bet.side === bet.outcome) !== firstBetWon) break;
+      streak += firstBetWon ? 1 : -1;
+    }
+  }
+
+  const result: PortfolioRoi = {
+    address: bettor_address,
+    roi: totalStaked === 0 ? 0 : Math.round(((totalWon - totalStaked) / totalStaked) * 10_000) / 100,
+    win_rate: resolvedBets.length === 0 ? 0 : Math.round((winCount / resolvedBets.length) * 10_000) / 100,
+    streak,
+  };
+
+  await cache.set(cacheKey, result, 60);
+  return result;
 }
 
 /**
