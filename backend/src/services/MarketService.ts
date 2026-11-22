@@ -4,7 +4,7 @@
 // Contributors: implement every function marked TODO.
 // ============================================================
 
-import type { Market, MarketStats, PlatformStats } from '../models/Market';
+import type { Market, MarketStats, PlatformMarketStats, PlatformStats } from '../models/Market';
 import type { Bet } from '../models/Bet';
 import { pool } from '../config/db';
 import * as cache from './cache.service';
@@ -892,6 +892,65 @@ export async function getPlatformStats(): Promise<PlatformStats> {
 
   await cache.set(cacheKey, stats, 60);
   return stats;
+}
+
+const EMPTY_PLATFORM_MARKET_STATS: PlatformMarketStats = {
+  total_markets_count: 0,
+  total_volume_xlm: 0,
+  total_bets_count: 0,
+  live_markets_count: 0,
+  unique_bettors_count: 0,
+  platform_fees_collected_xlm: 0,
+};
+
+/**
+ * Returns all-time platform market statistics.
+ * Fees are counted for resolved markets with a winning pool; cancelled and
+ * no-contest markets do not collect a platform fee.
+ */
+export async function getPlatformMarketStats(): Promise<PlatformMarketStats> {
+  const cacheKey = 'platform:market-stats';
+  const cached = await cache.get<PlatformMarketStats>(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const { rows } = await marketQuery(`
+      SELECT
+        (SELECT COUNT(*) FROM markets) AS total_markets_count,
+        (SELECT COALESCE(SUM(total_pool::numeric), 0) FROM markets) AS total_volume_stroops,
+        (SELECT COUNT(*) FROM bets) AS total_bets_count,
+        (SELECT COUNT(*) FROM markets WHERE status = 'open') AS live_markets_count,
+        (SELECT COUNT(DISTINCT bettor_address) FROM bets) AS unique_bettors_count,
+        (
+          SELECT COALESCE(SUM(TRUNC(total_pool::numeric * fee_bps / 10000)), 0)
+          FROM markets
+          WHERE status = 'resolved'
+            AND outcome <> 'no_contest'
+            AND CASE outcome
+              WHEN 'fighter_a' THEN pool_a::numeric > 0
+              WHEN 'fighter_b' THEN pool_b::numeric > 0
+              WHEN 'draw' THEN pool_draw::numeric > 0
+              ELSE FALSE
+            END
+        ) AS platform_fees_stroops
+    `);
+
+    const row = rows[0];
+    const stats: PlatformMarketStats = {
+      total_markets_count: Number(row.total_markets_count) || 0,
+      total_volume_xlm: (Number(row.total_volume_stroops) || 0) / 10_000_000,
+      total_bets_count: Number(row.total_bets_count) || 0,
+      live_markets_count: Number(row.live_markets_count) || 0,
+      unique_bettors_count: Number(row.unique_bettors_count) || 0,
+      platform_fees_collected_xlm: (Number(row.platform_fees_stroops) || 0) / 10_000_000,
+    };
+
+    await cache.set(cacheKey, stats, 600);
+    return stats;
+  } catch (err) {
+    logger.error({ err }, 'MarketService.getPlatformMarketStats: failed to retrieve statistics');
+    return EMPTY_PLATFORM_MARKET_STATS;
+  }
 }
 
 // ---------------------------------------------------------------------------

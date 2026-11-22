@@ -8,9 +8,10 @@
  */
 
 import { pool } from '../../src/config/db';
-import { getMarkets, getPlatformStats } from '../../src/services/MarketService';
+import { getMarkets, getPlatformMarketStats, getPlatformStats } from '../../src/services/MarketService';
 import { AppError } from '../../src/utils/AppError';
 import { ERROR_CODES } from '../../src/constants/errorCodes';
+import * as cache from '../../src/services/cache.service';
 
 // ── Mock dependencies ────────────────────────────────────────────────────────
 
@@ -107,5 +108,45 @@ describe('MarketService — #653: SQL error leak prevention', () => {
 
     await expect(getPlatformStats()).rejects.toBeInstanceOf(AppError);
     await expect(getPlatformStats()).rejects.toMatchObject({ statusCode: 500 });
+  });
+
+  it('getPlatformMarketStats() converts aggregate values to XLM and caches for 10 minutes', async () => {
+    mockedPool.query.mockResolvedValueOnce({
+      rows: [{
+        total_markets_count: '5',
+        total_volume_stroops: '50000000000',
+        total_bets_count: '200',
+        live_markets_count: '3',
+        unique_bettors_count: '75',
+        platform_fees_stroops: '250000000',
+      }],
+    } as never);
+
+    await expect(getPlatformMarketStats()).resolves.toEqual({
+      total_markets_count: 5,
+      total_volume_xlm: 5000,
+      total_bets_count: 200,
+      live_markets_count: 3,
+      unique_bettors_count: 75,
+      platform_fees_collected_xlm: 25,
+    });
+    expect(cache.set).toHaveBeenCalledWith(
+      'platform:market-stats',
+      expect.objectContaining({ total_markets_count: 5 }),
+      600,
+    );
+  });
+
+  it('getPlatformMarketStats() returns zeroed statistics on database failure', async () => {
+    mockedPool.query.mockRejectedValue(makePgError());
+
+    await expect(getPlatformMarketStats()).resolves.toEqual({
+      total_markets_count: 0,
+      total_volume_xlm: 0,
+      total_bets_count: 0,
+      live_markets_count: 0,
+      unique_bettors_count: 0,
+      platform_fees_collected_xlm: 0,
+    });
   });
 });

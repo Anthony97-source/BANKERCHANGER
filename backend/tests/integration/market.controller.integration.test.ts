@@ -41,6 +41,15 @@ const mockPlatformStats = {
   totalBets: 200,
 };
 
+const mockPlatformMarketStats = {
+  total_markets_count: 5,
+  total_volume_xlm: 5000,
+  total_bets_count: 200,
+  live_markets_count: 3,
+  unique_bettors_count: 75,
+  platform_fees_collected_xlm: 25,
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
 });
@@ -205,5 +214,32 @@ describe('GET /api/stats', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject(mockPlatformStats);
+  });
+});
+
+describe('GET /api/market-stats', () => {
+  it('returns aggregated market statistics', async () => {
+    (MarketService.getPlatformMarketStats as jest.Mock).mockResolvedValue(mockPlatformMarketStats);
+
+    const res = await request(app).get('/api/market-stats');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(mockPlatformMarketStats);
+  });
+
+  it('returns zeroed statistics with 200 if the stats service rejects', async () => {
+    (MarketService.getPlatformMarketStats as jest.Mock).mockRejectedValue(new Error('database unavailable'));
+
+    const res = await request(app).get('/api/market-stats');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      total_markets_count: 0,
+      total_volume_xlm: 0,
+      total_bets_count: 0,
+      live_markets_count: 0,
+      unique_bettors_count: 0,
+      platform_fees_collected_xlm: 0,
+    });
   });
 });

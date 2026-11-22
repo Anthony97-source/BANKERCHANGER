@@ -11,6 +11,7 @@ import { ERROR_CODES } from '../../constants/errorCodes';
 import { validateQuery } from '../../middleware/validation.middleware';
 import * as MarketService from '../../services/MarketService';
 import * as OracleService from '../../oracle/OracleService';
+import { logger } from '../../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Issue #18 — listMarkets
@@ -359,6 +360,32 @@ export async function getPlatformStats(req: Request, res: Response, next: NextFu
     res.status(200).json(stats);
   } catch (err) {
     next(err);
+  }
+}
+
+/**
+ * GET /api/market-stats
+ *
+ * Returns aggregated platform market statistics. Always responds 200; if the
+ * stats service is unavailable, returns zero-valued statistics.
+ */
+export async function getPlatformMarketStats(
+  _req: Request,
+  res: Response,
+): Promise<void> {
+  try {
+    const stats = await MarketService.getPlatformMarketStats();
+    res.status(200).json(stats);
+  } catch (err) {
+    logger.error({ err }, 'GET /api/market-stats failed');
+    res.status(200).json({
+      total_markets_count: 0,
+      total_volume_xlm: 0,
+      total_bets_count: 0,
+      live_markets_count: 0,
+      unique_bettors_count: 0,
+      platform_fees_collected_xlm: 0,
+    });
   }
 }
 
