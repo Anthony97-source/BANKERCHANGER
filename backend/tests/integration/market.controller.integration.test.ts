@@ -133,12 +133,20 @@ describe('GET /api/markets', () => {
 
 describe('GET /api/markets/:id', () => {
   it('returns 200 with market data', async () => {
-    (MarketService.getMarketById as jest.Mock).mockResolvedValue(mockMarket);
+    const marketWithOdds = {
+      ...mockMarket,
+      odds: { odds_a: 5000, odds_b: 3000, odds_draw: 2000 },
+    };
+    (MarketService.getMarketById as jest.Mock).mockResolvedValue(marketWithOdds);
 
     const res = await request(app).get('/api/markets/market-1');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ market_id: 'market-1' });
+    expect(res.body).toMatchObject({
+      market_id: 'market-1',
+      odds: { odds_a: 5000, odds_b: 3000, odds_draw: 2000 },
+    });
+    expect(MarketService.getMarketById).toHaveBeenCalledWith('market-1');
   });
 
   it('returns 404 when market not found', async () => {
@@ -150,6 +158,7 @@ describe('GET /api/markets/:id', () => {
     const res = await request(app).get('/api/markets/nonexistent');
 
     expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Market not found' });
   });
 });
 

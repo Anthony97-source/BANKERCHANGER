@@ -431,10 +431,10 @@ export async function getMarketById(market_id: string): Promise<MarketWithOdds> 
   const market = await db().findMarketById(market_id);
   if (!market) throw AppError.notFound(`Market not found: ${market_id}`);
 
-  const odds = await calculateOdds(market_id);
+  const odds = await getMarketOdds(market_id);
   const result: MarketWithOdds = {
     ...market,
-    odds: { fighterA: odds.fighterA, fighterB: odds.fighterB, draw: odds.draw },
+    odds,
   };
 
   await cache.set(cacheKey, result, 10);

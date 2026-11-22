@@ -69,7 +69,7 @@ router.get('/', listMarketsValidation, listMarkets);
  *           type: string
  *     responses:
  *       200:
- *         description: Market details
+ *         description: Market details including current odds
  *       404:
  *         description: Market not found
  */

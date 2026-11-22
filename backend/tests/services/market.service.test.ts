@@ -93,6 +93,11 @@ describe('MarketService', () => {
     await expect(getMarketById('unknown')).rejects.toBeInstanceOf(AppError);
   });
 
+  it('getMarketById() includes live odds from getMarketOdds()', async () => {
+    const market = await getMarketById('mkt-1');
+    expect(market.odds).toEqual({ odds_a: 3333, odds_b: 3333, odds_draw: 3333 });
+  });
+
   // 4 ─────────────────────────────────────────────────────────────────────────
   it('getMarketOdds() returns equal implied probabilities (33.33%) for empty pools', async () => {
     const odds = await getMarketOdds('mkt-1'); // pool totals are all '0'
