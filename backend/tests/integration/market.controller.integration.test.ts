@@ -209,6 +209,38 @@ describe('GET /api/markets/:id/bets', () => {
   });
 });
 
+describe('GET /api/bets/:bettor_address', () => {
+  const bettorAddress = mockBet.bettor_address;
+
+  it('returns all bets as an array sorted newest first', async () => {
+    const olderBet = { ...mockBet, bet_id: 'older', placed_at: '2025-01-01T00:00:00.000Z' };
+    const newerBet = { ...mockBet, bet_id: 'newer', placed_at: '2026-01-01T00:00:00.000Z' };
+    (MarketService.getBetsByAddress as jest.Mock).mockResolvedValue([olderBet, newerBet]);
+
+    const res = await request(app).get(`/api/bets/${bettorAddress}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([newerBet, olderBet]);
+    expect(MarketService.getBetsByAddress).toHaveBeenCalledWith(bettorAddress);
+  });
+
+  it('returns 400 for an invalid Stellar address', async () => {
+    const res = await request(app).get('/api/bets/invalid-address');
+
+    expect(res.status).toBe(400);
+    expect(MarketService.getBetsByAddress).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array when the address has no bets', async () => {
+    (MarketService.getBetsByAddress as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app).get(`/api/bets/${bettorAddress}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
 describe('GET /api/markets/:id/odds', () => {
   it('returns 200 with market stats (odds)', async () => {
     (MarketService.getMarketStats as jest.Mock).mockResolvedValue(mockStats);

@@ -1726,34 +1726,52 @@ paths:
   # ---------------------------------------------------------------------------
   /api/bets/{bettor_address}:
     get:
-      summary: Get all bets by a Stellar address
+      summary: Get bets for a Stellar address
+      description: Returns all bets as a Bet array when no pagination parameters are provided; cursor/page pagination remains available when requested.
       operationId: getBetsByAddress
       tags: [ Bets ]
       parameters:
         - name: bettor_address
           in: path
           required: true
+          schema: { type: string, pattern: '^G[A-Z2-7]{55}$' }
+        - name: cursor
+          in: query
+          description: Opaque cursor returned as nextCursor by the previous response.
           schema: { type: string }
         - name: page
           in: query
+          deprecated: true
           schema: { type: integer, default: 1 }
+        - name: offset
+          in: query
+          deprecated: true
+          schema: { type: integer }
         - name: limit
           in: query
-          schema: { type: integer, default: 20 }
+          schema: { type: integer, default: 50, maximum: 100 }
       responses:
         '200':
-          description: Paginated list of bets
+          description: Bet array without pagination parameters, or paginated bets when pagination is requested.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  bets:
-                    type: array
+                oneOf:
+                  - type: array
                     items: { $ref: '#/components/schemas/Bet' }
-                  total: { type: integer }
-                  page: { type: integer }
-                  limit: { type: integer }
+                  - type: object
+                    properties:
+                      bets:
+                        type: array
+                        items: { $ref: '#/components/schemas/Bet' }
+                      total: { type: integer }
+                      page: { type: integer }
+                      limit: { type: integer }
+                      nextCursor: { type: string, nullable: true }
+              examples:
+                allBets:
+                  summary: Unpaginated bet history
+                  value: []
         '400':
           description: Invalid Stellar address
           content:
