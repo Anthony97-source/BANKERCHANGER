@@ -8,7 +8,7 @@
  */
 
 import { pool } from '../../src/config/db';
-import { getMarkets, getPlatformMarketStats, getPlatformStats } from '../../src/services/MarketService';
+import { getMarkets, getPlatformMarketStats, getPlatformStats, getRecentMarkets } from '../../src/services/MarketService';
 import { AppError } from '../../src/utils/AppError';
 import { ERROR_CODES } from '../../src/constants/errorCodes';
 import * as cache from '../../src/services/cache.service';
@@ -148,5 +148,35 @@ describe('MarketService — #653: SQL error leak prevention', () => {
       unique_bettors_count: 0,
       platform_fees_collected_xlm: 0,
     });
+  });
+
+  it('getRecentMarkets() returns recent summaries and caches them for five minutes', async () => {
+    const createdAt = new Date('2026-11-22T12:00:00.000Z');
+    mockedPool.query.mockResolvedValueOnce({
+      rows: [{
+        fighter_a: 'Fighter A',
+        fighter_b: 'Fighter B',
+        status: 'open',
+        total_pool: '125000000',
+        created_at: createdAt,
+      }],
+    } as never);
+
+    await expect(getRecentMarkets()).resolves.toEqual([{
+      fighter_a: 'Fighter A',
+      fighter_b: 'Fighter B',
+      status: 'open',
+      total_pool_xlm: 12.5,
+      created_at: createdAt,
+    }]);
+    expect(mockedPool.query).toHaveBeenCalledWith(
+      expect.stringMatching(/ORDER BY created_at DESC\s+LIMIT 10/),
+      undefined,
+    );
+    expect(cache.set).toHaveBeenCalledWith(
+      'markets:recent',
+      expect.arrayContaining([expect.objectContaining({ total_pool_xlm: 12.5 })]),
+      300,
+    );
   });
 });

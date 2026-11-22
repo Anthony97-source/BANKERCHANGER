@@ -76,3 +76,11 @@ export interface PlatformMarketStats {
   unique_bettors_count: number;
   platform_fees_collected_xlm: number;
 }
+
+export interface RecentMarketSummary {
+  fighter_a: string;
+  fighter_b: string;
+  status: MarketStatusDB;
+  total_pool_xlm: number;
+  created_at: Date;
+}

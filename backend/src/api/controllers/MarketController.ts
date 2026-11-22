@@ -83,6 +83,24 @@ export async function listMarkets(req: Request, res: Response, next: NextFunctio
 }
 
 /**
+ * GET /api/recent-markets
+ *
+ * Returns summary information for the ten most recently created markets.
+ */
+export async function getRecentMarkets(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const markets = await MarketService.getRecentMarkets();
+    res.status(200).json(markets);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/markets/:market_id
  *
  * Returns full market detail including current odds.

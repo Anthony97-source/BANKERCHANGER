@@ -140,6 +140,24 @@ describe('GET /api/markets', () => {
   });
 });
 
+describe('GET /api/recent-markets', () => {
+  it('returns recent market summaries', async () => {
+    const recentMarkets = [{
+      fighter_a: 'Fighter A',
+      fighter_b: 'Fighter B',
+      status: 'open',
+      total_pool_xlm: 12.5,
+      created_at: '2026-11-22T12:00:00.000Z',
+    }];
+    (MarketService.getRecentMarkets as jest.Mock).mockResolvedValue(recentMarkets);
+
+    const res = await request(app).get('/api/recent-markets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(recentMarkets);
+  });
+});
+
 describe('GET /api/markets/:id', () => {
   it('returns 200 with market data', async () => {
     (MarketService.getMarketById as jest.Mock).mockResolvedValue(mockMarket);

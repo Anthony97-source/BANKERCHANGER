@@ -4,7 +4,7 @@
 // Contributors: implement every function marked TODO.
 // ============================================================
 
-import type { Market, MarketStats, PlatformMarketStats, PlatformStats } from '../models/Market';
+import type { Market, MarketStats, PlatformMarketStats, PlatformStats, RecentMarketSummary } from '../models/Market';
 import type { Bet } from '../models/Bet';
 import { pool } from '../config/db';
 import * as cache from './cache.service';
@@ -401,6 +401,32 @@ export async function getMarkets(
 
   await cache.set(cacheKey, result, 30);
   return result;
+}
+
+/**
+ * Returns the ten most recently created markets, cached for five minutes.
+ */
+export async function getRecentMarkets(): Promise<RecentMarketSummary[]> {
+  const cacheKey = 'markets:recent';
+  const cached = await cache.get<RecentMarketSummary[]>(cacheKey);
+  if (cached) return cached;
+
+  const { rows } = await marketQuery(
+    `SELECT fighter_a, fighter_b, status, total_pool, created_at
+     FROM markets
+     ORDER BY created_at DESC
+     LIMIT 10`,
+  );
+  const markets: RecentMarketSummary[] = rows.map((row) => ({
+    fighter_a: row.fighter_a,
+    fighter_b: row.fighter_b,
+    status: row.status,
+    total_pool_xlm: (Number(row.total_pool) || 0) / 10_000_000,
+    created_at: new Date(row.created_at),
+  }));
+
+  await cache.set(cacheKey, markets, 300);
+  return markets;
 }
 
 /**
