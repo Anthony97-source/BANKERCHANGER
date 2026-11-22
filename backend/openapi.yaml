@@ -235,13 +235,38 @@ components:
 
     MarketStats:
       type: object
+      required:
+        - market_id
+        - total_bets_count
+        - total_volume_xlm
+        - odds_a
+        - odds_b
+        - odds_draw
+        - top_bettors
+        - betting_distribution
       properties:
         market_id: { type: string }
-        total_bets: { type: integer }
-        unique_bettors: { type: integer }
-        largest_bet_xlm: { type: number }
-        average_bet_xlm: { type: number }
-        total_pooled_xlm: { type: number }
+        total_bets_count: { type: integer }
+        total_volume_xlm: { type: number, description: Total bet volume in XLM }
+        odds_a: { type: integer, description: Fighter A pool share in basis points }
+        odds_b: { type: integer, description: Fighter B pool share in basis points }
+        odds_draw: { type: integer, description: Draw pool share in basis points }
+        top_bettors:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            required: [ bettor_address, volume_xlm ]
+            properties:
+              bettor_address: { type: string }
+              volume_xlm: { type: number }
+        betting_distribution:
+          type: object
+          required: [ A, B, DRAW ]
+          properties:
+            A: { type: number, description: Fighter A bet volume percentage }
+            B: { type: number, description: Fighter B bet volume percentage }
+            DRAW: { type: number, description: Draw bet volume percentage }
 
     SimulatePayout:
       type: object
@@ -1540,7 +1565,8 @@ paths:
 
   /api/markets/{market_id}/stats:
     get:
-      summary: Get aggregate stats for a market
+      summary: Get market betting statistics, cached for 60 seconds
+      description: Returns bet counts and volume, live odds in basis points, the five highest-volume bettors, and the pool betting distribution.
       operationId: getMarketStats
       tags: [ Markets ]
       parameters:
@@ -1554,6 +1580,20 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MarketStats' }
+              example:
+                market_id: mkt-1
+                total_bets_count: 7
+                total_volume_xlm: 10
+                odds_a: 2800
+                odds_b: 6200
+                odds_draw: 1000
+                top_bettors:
+                  - bettor_address: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF
+                    volume_xlm: 5
+                betting_distribution:
+                  A: 28
+                  B: 62
+                  DRAW: 10
         '400':
           description: Invalid market ID format
           content:

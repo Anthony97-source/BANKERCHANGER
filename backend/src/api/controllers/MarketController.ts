@@ -135,8 +135,8 @@ export async function getMarketBets(req: Request, res: Response, next: NextFunct
 /**
  * GET /api/markets/:market_id/stats
  *
- * Returns aggregate market statistics.
- * Responds 404 if market not found, 200 with MarketStats.
+ * Returns market volume, live odds, top bettors, and betting distribution.
+ * Statistics are cached for 60 seconds.
  */
 export async function getMarketStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {

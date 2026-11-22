@@ -28,10 +28,13 @@ const mockBet = {
 
 const mockStats = {
   market_id: 'market-1',
-  total_bets: 10,
-  total_volume: '1000',
-  fighter_a_volume: '600',
-  fighter_b_volume: '400',
+  total_bets_count: 10,
+  total_volume_xlm: 1000,
+  odds_a: 6000,
+  odds_b: 3000,
+  odds_draw: 1000,
+  top_bettors: [{ bettor_address: mockBet.bettor_address, volume_xlm: 100 }],
+  betting_distribution: { A: 60, B: 30, DRAW: 10 },
 };
 
 const mockPlatformStats = {
@@ -213,7 +216,7 @@ describe('GET /api/markets/:id/odds', () => {
     const res = await request(app).get('/api/markets/market-1/stats');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ market_id: 'market-1' });
+    expect(res.body).toEqual(mockStats);
   });
 
   it('returns 404 when market not found', async () => {

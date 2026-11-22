@@ -140,6 +140,7 @@ router.get('/:market_id/odds', getMarketOdds);
  * /markets/{market_id}/stats:
  *   get:
  *     summary: Get statistics for a market
+ *     description: Returns bet counts and volume, live odds, the five highest-volume bettors, and the pool betting distribution. Cached for 60 seconds.
  *     tags: [Markets]
  *     parameters:
  *       - in: path
@@ -149,7 +150,9 @@ router.get('/:market_id/odds', getMarketOdds);
  *           type: string
  *     responses:
  *       200:
- *         description: Market statistics
+ *         description: Market betting statistics
+ *       404:
+ *         description: Market not found
  */
 router.get('/:market_id/stats', getMarketStats);
 
