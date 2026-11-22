@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act } from '@testing-library/react';
+import '@testing-library/jest-dom';
 import React from 'react';
-import { ThemeToggle, getInitialTheme } from '../ThemeToggle';
+import { getInitialTheme, ThemeToggle } from '../ThemeToggle';
 
 describe('ThemeToggle', () => {
   beforeEach(() => {
@@ -31,5 +32,24 @@ describe('ThemeToggle', () => {
     });
     // After cycle
     expect(localStorage.getItem('bankerchanger_theme')).toBeDefined();
+  });
+
+  it('uses the system preference when system theme is selected', () => {
+    act(() => {
+      document.documentElement.classList.remove('dark');
+    });
+
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByTestId('theme-toggle'));
+    fireEvent.click(screen.getByTestId('theme-toggle'));
+    fireEvent.click(screen.getByTestId('theme-toggle'));
+
+    expect(localStorage.getItem('bankerchanger_theme')).toBe('system');
+    expect(document.documentElement).toHaveClass('dark');
+  });
+
+  it('falls back to the system preference for an unsupported stored theme', () => {
+    localStorage.setItem('bankerchanger_theme', 'sepia');
+    expect(getInitialTheme()).toBe('system');
   });
 });
