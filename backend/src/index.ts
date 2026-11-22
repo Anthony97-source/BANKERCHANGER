@@ -33,6 +33,7 @@ import oracleRouter from "./routes/oracle.routes";
 import walletsRouter from "./routes/wallets.routes";
 import notificationsRouter from "./routes/notifications.routes";
 import engagementRouter from "./routes/engagement.routes";
+import healthRouter from "./routes/health.routes";
 import { getPortfolio, getPlatformMarketStats, getPlatformStats, getRecentMarkets } from "./api/controllers/MarketController";
 import claimsRouter from "./routes/bet.routes";
 import { startAutoResolutionCron, startAutoLockCron } from "./cron/autoResolution.cron";
@@ -143,6 +144,7 @@ app.get("/health/detailed", requireAdminJwt, async (_req, res) => {
 
 // Rate-limited route groups
 app.use("/auth", rateLimit({ windowMs: 60_000, max: 10, keyBy: "ip" }));
+app.use("/api", healthRouter);
 app.use("/api", rateLimit({ windowMs: 60_000, max: 60, keyBy: "ip" })); // Public endpoints
 app.use("/api/oracle", rateLimit({ windowMs: 60_000, max: 10, keyBy: "ip" })); // Oracle endpoint stricter
 app.use("/api/admin", rateLimit({ windowMs: 60_000, max: 20, keyBy: "ip" })); // Admin endpoints
