@@ -73,7 +73,7 @@ export async function submitOracleResult(
 
 /**
  * GET /api/oracle/reports/:match_id
- * Returns all oracle reports for a fight.
+ * Returns all oracle reports for a fight, newest first.
  */
 export async function getOracleReports(
   req: Request,
@@ -82,14 +82,10 @@ export async function getOracleReports(
 ): Promise<void> {
   try {
     const { rows } = await pool.query(
-      `SELECT reported_at AS timestamp, oracle_address, outcome, signature
-       FROM oracle_reports WHERE match_id = $1 ORDER BY reported_at ASC`,
+      `SELECT oracle_address, outcome, reported_at, tx_hash, accepted
+       FROM oracle_reports WHERE match_id = $1 ORDER BY reported_at DESC`,
       [req.params.match_id],
     );
-    if (rows.length === 0) {
-      res.status(404).json({ success: false, error: { message: 'No oracle reports found for this match' } });
-      return;
-    }
     res.status(200).json({ match_id: req.params.match_id, reports: rows });
   } catch (error) {
     next(error);

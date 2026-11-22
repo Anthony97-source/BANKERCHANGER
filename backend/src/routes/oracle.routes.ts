@@ -92,9 +92,7 @@ router.post('/submit', requireOracleApiKey, validateSubmitOracleResult, submitOr
  *           type: string
  *     responses:
  *       200:
- *         description: List of oracle reports for the match
- *       404:
- *         description: No reports found
+ *         description: Oracle reports for the match, newest first; an empty list is returned when none exist
  */
 router.get('/reports/:match_id', getOracleReports);
 

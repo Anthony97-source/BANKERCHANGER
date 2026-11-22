@@ -2028,22 +2028,30 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Oracle reports for the fight
+          description: Oracle reports for the fight in descending reported_at order; reports is empty when none exist
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/OracleReport' }
+                type: object
+                required: [ match_id, reports ]
+                properties:
+                  match_id: { type: string }
+                  reports:
+                    type: array
+                    items:
+                      type: object
+                      required: [ oracle_address, outcome, reported_at, tx_hash, accepted ]
+                      properties:
+                        oracle_address: { type: string }
+                        outcome: { type: string }
+                        reported_at: { type: string, format: date-time }
+                        tx_hash: { type: string, nullable: true }
+                        accepted: { type: boolean }
         '400':
           description: Invalid match ID format
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse400' }
-        '404':
-          description: No reports found
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
         '429':
           description: Rate limit exceeded
           content:

@@ -31,19 +31,28 @@ describe('getOracleReports', () => {
   });
 
   it('returns reports for a match', async () => {
-    const reports = [{ timestamp: new Date(), oracle_address: 'GABC', outcome: 'fighter_a', signature: 'abc' }];
+    const reports = [{
+      oracle_address: 'GABC',
+      outcome: 'fighter_a',
+      reported_at: new Date(),
+      tx_hash: 'stellar-tx-hash',
+      accepted: true,
+    }];
     (pool.query as jest.Mock).mockResolvedValue({ rows: reports });
     await getOracleReports(req, res as Response, next);
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('FROM oracle_reports WHERE match_id = $1'), ['match-1']);
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringMatching(/SELECT oracle_address, outcome, reported_at, tx_hash, accepted[\s\S]*ORDER BY reported_at DESC/),
+      ['match-1'],
+    );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ match_id: 'match-1', reports });
   });
 
-  it('returns 404 when no reports exist', async () => {
+  it('returns an empty report array when the match has no reports', async () => {
     (pool.query as jest.Mock).mockResolvedValue({ rows: [] });
     await getOracleReports(req, res as Response, next);
-    expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ match_id: 'match-1', reports: [] });
   });
 });
 
