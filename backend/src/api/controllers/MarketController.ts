@@ -221,6 +221,26 @@ export async function getMarketOdds(
 }
 
 /**
+ * GET /api/markets/:market_id/live-odds
+ *
+ * Returns uncached odds computed from the current market pools.
+ */
+export async function getLiveMarketOdds(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const { market_id } = req.params;
+    const odds = await MarketService.getLiveMarketOdds(market_id);
+    res.status(200).json(odds);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/markets/:market_id/odds/stream
  *
  * Server-Sent Events stream of live parimutuel odds for a market.

@@ -232,6 +232,14 @@ export interface MarketOdds {
   odds_draw: number;
 }
 
+export interface LiveMarketOdds extends MarketOdds {
+  implied_probabilities: {
+    fighter_a: number;
+    fighter_b: number;
+    draw: number;
+  };
+}
+
 export interface MarketWithOdds extends Market {
   odds: MarketOdds;
 }
@@ -477,6 +485,28 @@ export async function getMarketById(market_id: string): Promise<MarketWithOdds> 
  * if DB pool sizes are stale (updated_at older than 30 seconds).
  */
 export async function getMarketOdds(market_id: string): Promise<MarketOdds> {
+  const { pool_a, pool_b, pool_draw, total_pool } = await getCurrentMarketPools(market_id);
+
+  // No bets placed yet — return equal implied probabilities (33.33%) instead
+  // of dividing by zero, which would surface as NaN/Infinity → null in JSON.
+  if (total_pool === 0n) {
+    const EQUAL_PROBABILITY_BPS = Math.round(10000 / 3);
+    return { odds_a: EQUAL_PROBABILITY_BPS, odds_b: EQUAL_PROBABILITY_BPS, odds_draw: EQUAL_PROBABILITY_BPS };
+  }
+
+  return {
+    odds_a: pool_a === 0n ? 0 : Number((pool_a * 10000n) / total_pool),
+    odds_b: pool_b === 0n ? 0 : Number((pool_b * 10000n) / total_pool),
+    odds_draw: pool_draw === 0n ? 0 : Number((pool_draw * 10000n) / total_pool),
+  };
+}
+
+async function getCurrentMarketPools(market_id: string): Promise<{
+  pool_a: bigint;
+  pool_b: bigint;
+  pool_draw: bigint;
+  total_pool: bigint;
+}> {
   const market = await db().findMarketById(market_id);
   if (!market) throw AppError.notFound(`Market not found: ${market_id}`);
 
@@ -500,18 +530,51 @@ export async function getMarketOdds(market_id: string): Promise<MarketOdds> {
     total_pool = BigInt(market.total_pool);
   }
 
-  // No bets placed yet — return equal implied probabilities (33.33%) instead
-  // of dividing by zero, which would surface as NaN/Infinity → null in JSON.
-  if (total_pool === 0n) {
-    const EQUAL_PROBABILITY_BPS = Math.round(10000 / 3);
-    return { odds_a: EQUAL_PROBABILITY_BPS, odds_b: EQUAL_PROBABILITY_BPS, odds_draw: EQUAL_PROBABILITY_BPS };
+  return {
+    pool_a,
+    pool_b,
+    pool_draw,
+    total_pool,
+  };
+}
+
+function normalizeOddsBps(poolA: bigint, poolB: bigint, poolDraw: bigint): [number, number, number] {
+  const pools = [poolA, poolB, poolDraw].map((pool) => pool > 0n ? pool : 0n);
+  const total = pools.reduce((sum, pool) => sum + pool, 0n);
+  if (total === 0n) return [3334, 3333, 3333];
+
+  const values = pools.map((pool) => ({
+    bps: Number((pool * 10_000n) / total),
+    remainder: (pool * 10_000n) % total,
+  }));
+  const remainder = 10_000 - values.reduce((sum, value) => sum + value.bps, 0);
+  const order = values
+    .map((value, index) => ({ index, remainder: value.remainder }))
+    .sort((a, b) => a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1);
+  for (let i = 0; i < remainder; i++) {
+    values[order[i].index].bps++;
   }
 
+  return [values[0].bps, values[1].bps, values[2].bps];
+}
+
+/**
+ * Returns real-time pool odds as normalized basis points and percentages.
+ * Does not use the cache; stale database pools are refreshed from Stellar RPC.
+ */
+export async function getLiveMarketOdds(market_id: string): Promise<LiveMarketOdds> {
+  const { pool_a, pool_b, pool_draw } = await getCurrentMarketPools(market_id);
+  const [odds_a, odds_b, odds_draw] = normalizeOddsBps(pool_a, pool_b, pool_draw);
 
   return {
-    odds_a: pool_a === 0n ? 0 : Number((pool_a * 10000n) / total_pool),
-    odds_b: pool_b === 0n ? 0 : Number((pool_b * 10000n) / total_pool),
-    odds_draw: pool_draw === 0n ? 0 : Number((pool_draw * 10000n) / total_pool),
+    odds_a,
+    odds_b,
+    odds_draw,
+    implied_probabilities: {
+      fighter_a: odds_a / 100,
+      fighter_b: odds_b / 100,
+      draw: odds_draw / 100,
+    },
   };
 }
 

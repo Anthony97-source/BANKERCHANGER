@@ -202,6 +202,24 @@ describe('GET /api/markets/:id/odds', () => {
   });
 });
 
+describe('GET /api/markets/:id/live-odds', () => {
+  it('returns live odds without allowing response caching', async () => {
+    const odds = {
+      odds_a: 6000,
+      odds_b: 3000,
+      odds_draw: 1000,
+      implied_probabilities: { fighter_a: 60, fighter_b: 30, draw: 10 },
+    };
+    (MarketService.getLiveMarketOdds as jest.Mock).mockResolvedValue(odds);
+
+    const res = await request(app).get('/api/markets/market-1/live-odds');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body).toEqual(odds);
+  });
+});
+
 describe('Admin endpoints require JWT', () => {
   it('returns 401 on POST /api/admin/dispute/:id without token', async () => {
     const res = await request(app).post('/api/admin/dispute/market-1');
