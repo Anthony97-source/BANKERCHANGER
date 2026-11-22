@@ -9,6 +9,8 @@ import { AppError } from '../../utils/AppError';
 import * as StellarService from '../../services/StellarService';
 import * as BetService from '../../services/BetService';
 import * as OracleService from '../../oracle/OracleService';
+import { decrypt } from '../../services/crypto.service';
+import { verifyToken } from '../../services/totp.service';
 import { db, bulkPauseMarkets, bulkCancelMarkets, updateMarketStatus } from '../../services/MarketService';
 import { pool } from '../../config/db';
 import { auditLog } from '../../services/auditLog.service';
@@ -196,35 +198,58 @@ export async function investigateDispute(
 
 /**
  * POST /api/admin/resolve-dispute/:market_id
- * Body: { final_outcome: string }
+ * Body: { totp_code: string; outcome: FightOutcome }
  *
  * Phase 3 of the two-phase dispute flow.
  * Admin sets the final outcome for the disputed market.
  *
  * Steps:
  *   1. Require admin JWT (middleware)
- *   2. Validate final_outcome in request body
+ *   2. Validate TOTP and outcome in request body
  *   3. Validate market exists and is in 'disputed' status
  *   4. Validate dispute is in 'reviewing' status
  *   5. Build admin_signature from ADMIN_PRIVATE_KEY
- *   6. Call OracleService.raiseDispute() to broadcast on-chain
+ *   6. Call OracleService.adminOverrideResult() to broadcast on-chain
  *   7. Update dispute status to 'resolved' and set final_outcome
  *   8. Update market outcome and set status back to 'resolved'
- *   9. Return updated dispute and market
+ *   9. Log the admin action and return { tx_hash }
  */
 export async function resolveDispute(
   req: Request,
   res: Response,
 ): Promise<void> {
   const { market_id } = req.params;
-  const { final_outcome } = req.body;
+  const { totp_code, outcome } = req.body ?? {};
 
-  if (!final_outcome || typeof final_outcome !== 'string') {
-    throw new AppError(400, 'final_outcome is required');
+  if (typeof totp_code !== 'string' || !totp_code) {
+    throw new AppError(400, 'totp_code is required');
+  }
+  if (typeof outcome !== 'string' || !VALID_OUTCOMES.includes(outcome as typeof VALID_OUTCOMES[number])) {
+    throw new AppError(400, `outcome must be one of: ${VALID_OUTCOMES.join(', ')}`);
   }
 
-  if (!VALID_OUTCOMES.includes(final_outcome as typeof VALID_OUTCOMES[number])) {
-    throw new AppError(400, `final_outcome must be one of: ${VALID_OUTCOMES.join(', ')}`);
+  const adminId = ((req as unknown as Record<string, unknown>).userId as string | undefined) ?? null;
+  let totpSecret = process.env.ADMIN_TOTP_SECRET;
+  if (!totpSecret) {
+    if (!adminId) throw AppError.unauthorized('Admin TOTP is not configured');
+
+    const { rows } = await pool.query(
+      `SELECT two_factor_enabled, two_factor_secret
+       FROM users
+       WHERE id = $1 AND role = 'admin'`,
+      [adminId],
+    );
+    const adminUser = rows[0] as {
+      two_factor_enabled?: boolean;
+      two_factor_secret?: string | null;
+    } | undefined;
+    if (!adminUser?.two_factor_enabled || !adminUser.two_factor_secret) {
+      throw AppError.unauthorized('Admin TOTP is not configured');
+    }
+    totpSecret = decrypt(adminUser.two_factor_secret);
+  }
+  if (!verifyToken(totpSecret, totp_code)) {
+    throw AppError.unauthorized('Invalid or expired TOTP code');
   }
 
   const market = await db().findMarketById(market_id);
@@ -253,18 +278,17 @@ export async function resolveDispute(
     throw new AppError(500, 'ADMIN_PRIVATE_KEY is not configured on this server');
   }
   const adminKeypair = Keypair.fromSecret(adminPrivateKey);
-  const signaturePayload = Buffer.from(`${market_id}:${final_outcome}`, 'utf8');
+  const signaturePayload = Buffer.from(`${market_id}:${outcome}`, 'utf8');
   const admin_signature = Buffer.from(adminKeypair.sign(signaturePayload)).toString('hex');
 
   // Broadcast on-chain
-  const tx_hash = await OracleService.raiseDispute(
+  const tx_hash = await OracleService.adminOverrideResult(
     market.match_id,
-    final_outcome as OracleService.FightOutcome,
+    outcome as OracleService.FightOutcome,
     admin_signature,
   );
 
   const client = await pool.connect();
-  let disputeRecord: Record<string, unknown>;
   try {
     await client.query('BEGIN');
     const disputeResult = await client.query(
@@ -272,19 +296,18 @@ export async function resolveDispute(
        SET status = 'resolved', final_outcome = $1, resolved_at = NOW()
        WHERE market_id = $2 AND status = 'reviewing'
        RETURNING *`,
-      [final_outcome, market_id],
+      [outcome, market_id],
     );
     if (disputeResult.rowCount === 0) {
       throw new AppError(500, 'Failed to update dispute record');
     }
-    disputeRecord = disputeResult.rows[0];
 
     const marketResult = await client.query(
       `UPDATE markets
        SET outcome = $1, status = 'resolved', resolved_at = NOW(), updated_at = NOW()
        WHERE market_id = $2
        RETURNING resolved_at`,
-      [final_outcome, market_id],
+      [outcome, market_id],
     );
     if (marketResult.rows.length === 0) {
       throw new AppError(404, `Market not found: ${market_id}`);
@@ -294,7 +317,7 @@ export async function resolveDispute(
       id: tx_hash,
       type: 'market.resolved',
       created_at: resolvedAt.toISOString(),
-      data: { market_id, outcome: final_outcome },
+      data: { market_id, outcome },
     });
     await client.query('COMMIT');
   } catch (err) {
@@ -305,7 +328,6 @@ export async function resolveDispute(
   }
 
   const updatedMarket = await db().findMarketById(market_id);
-  const adminId = ((req as unknown as Record<string, unknown>).userId as string | undefined) ?? null;
   await auditLog.write({
     adminId,
     action: 'market_force_resolve',
@@ -314,11 +336,7 @@ export async function resolveDispute(
     afterState: updatedMarket ? { status: updatedMarket.status, outcome: updatedMarket.outcome } : null,
   });
 
-  res.status(200).json({
-    tx_hash,
-    dispute: disputeRecord,
-    market: updatedMarket,
-  });
+  res.status(200).json({ tx_hash });
 }
 
 /**

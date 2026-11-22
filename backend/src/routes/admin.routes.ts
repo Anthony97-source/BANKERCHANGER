@@ -201,19 +201,31 @@ router.post('/cancel/:market_id/refunds', requireAdmin, async (req: Request, res
  *         application/json:
  *           schema:
  *             type: object
- *             required: [action]
+ *             required: [totp_code, outcome]
  *             properties:
- *               action:
+ *               totp_code:
  *                 type: string
- *                 enum: [DISMISS, RESOLVE_NEW_OUTCOME]
- *               newWinningOutcome:
- *                 type: integer
- *                 enum: [0, 1]
+ *                 pattern: '^[0-9]{6}$'
+ *               outcome:
+ *                 type: string
+ *                 enum: [fighter_a, fighter_b, draw, no_contest]
  *     responses:
  *       200:
  *         description: Dispute resolved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [tx_hash]
+ *               properties:
+ *                 tx_hash:
+ *                   type: string
  *       401:
- *         description: Unauthorized
+ *         description: Unauthorized or invalid TOTP code
+ *       403:
+ *         description: Admin role required
+ *       400:
+ *         description: Invalid outcome or market state
  */
 router.post('/resolve-dispute/:market_id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {

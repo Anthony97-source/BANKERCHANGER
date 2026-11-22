@@ -1,6 +1,9 @@
 import { cancelMarket, flagDispute, investigateDispute, resolveDispute, listDisputes } from '../../src/api/controllers/AdminController';
 import { setDbAdapter } from '../../src/services/MarketService';
 import { invokeContract } from '../../src/services/StellarService';
+import { adminOverrideResult } from '../../src/oracle/OracleService';
+import { verifyToken } from '../../src/services/totp.service';
+import { decrypt } from '../../src/services/crypto.service';
 import { AppError } from '../../src/utils/AppError';
 import type { Market } from '../../src/models/Market';
 
@@ -10,8 +13,21 @@ jest.mock('../../src/services/StellarService', () => ({
 }));
 
 jest.mock('../../src/oracle/OracleService', () => ({
+  adminOverrideResult: jest.fn().mockResolvedValue('mock-dispute-tx-hash'),
   raiseDispute: jest.fn().mockResolvedValue('mock-dispute-tx-hash'),
   FightOutcome: {} as any,
+}));
+
+jest.mock('../../src/services/totp.service', () => ({
+  verifyToken: jest.fn().mockReturnValue(true),
+}));
+
+jest.mock('../../src/services/crypto.service', () => ({
+  decrypt: jest.fn((secret: string) => `decrypted:${secret}`),
+}));
+
+jest.mock('../../src/services/webhookDelivery.service', () => ({
+  enqueueWebhookEvent: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('@stellar/stellar-sdk', () => {
@@ -78,10 +94,12 @@ function makeMarket(overrides: Partial<Market> = {}): Market {
 let mockPoolQuery: jest.Mock;
 let mockUpdateMarketStatus: jest.Mock;
 const originalAdminAddress = process.env.ADMIN_ADDRESS;
+const originalAdminTotpSecret = process.env.ADMIN_TOTP_SECRET;
 
 jest.mock('../../src/config/db', () => ({
   pool: {
     query: jest.fn(),
+    connect: jest.fn(),
   },
 }));
 
@@ -108,7 +126,10 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (pool.query as jest.Mock).mockReset();
+    (pool.connect as jest.Mock).mockReset();
+    (verifyToken as jest.Mock).mockReturnValue(true);
     process.env.ADMIN_ADDRESS = 'GADMIN';
+    process.env.ADMIN_TOTP_SECRET = 'MFRGGZDFMZTWQ2LK';
     mockUpdateMarketStatus = jest.fn();
 
     setDbAdapter({
@@ -125,6 +146,11 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
       delete process.env.ADMIN_ADDRESS;
     } else {
       process.env.ADMIN_ADDRESS = originalAdminAddress;
+    }
+    if (originalAdminTotpSecret === undefined) {
+      delete process.env.ADMIN_TOTP_SECRET;
+    } else {
+      process.env.ADMIN_TOTP_SECRET = originalAdminTotpSecret;
     }
   });
 
@@ -351,50 +377,92 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
       });
     });
 
-    it('resolves dispute with final_outcome and updates market', async () => {
-      // Dispute in reviewing state
+    it('verifies TOTP, submits the override, resolves the market, and logs the admin action', async () => {
       (pool.query as jest.Mock)
-        // Check dispute status
         .mockResolvedValueOnce({ rows: [{ id: 1, status: 'reviewing' }] })
-        // Update dispute to resolved
-        .mockResolvedValueOnce({
-          rowCount: 1,
-          rows: [{ id: 1, market_id: 'mkt-dispute-1', status: 'resolved', final_outcome: 'fighter_b' }],
-        })
-        // Update market
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValue({ rows: [] });
+
+      const clientQuery = jest.fn(async (query: string) => {
+        if (query.includes('UPDATE disputes')) {
+          return {
+            rowCount: 1,
+            rows: [{ id: 1, market_id: 'mkt-dispute-1', status: 'resolved', final_outcome: 'fighter_b' }],
+          };
+        }
+        if (query.includes('UPDATE markets')) {
+          return { rows: [{ resolved_at: new Date() }] };
+        }
+        return { rows: [] };
+      });
+      (pool.connect as jest.Mock).mockResolvedValue({
+        query: clientQuery,
+        release: jest.fn(),
+      });
 
       const { req, res } = mockReqRes({
         params: { market_id: 'mkt-dispute-1' },
-        body: { final_outcome: 'fighter_b' },
+        body: { totp_code: '123456', outcome: 'fighter_b' },
       });
+      (req as unknown as Record<string, unknown>).userId = 'admin-1';
 
       process.env.ADMIN_PRIVATE_KEY = 'SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
       await resolveDispute(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tx_hash: 'mock-dispute-tx-hash',
-          dispute: expect.objectContaining({ status: 'resolved', final_outcome: 'fighter_b' }),
-          market: expect.objectContaining({ market_id: 'mkt-dispute-1' }),
-        }),
+      expect(verifyToken).toHaveBeenCalledWith('MFRGGZDFMZTWQ2LK', '123456');
+      expect(adminOverrideResult).toHaveBeenCalledWith('fight-1', 'fighter_b', expect.any(String));
+      expect(clientQuery).toHaveBeenCalledWith(
+        expect.stringContaining("SET outcome = $1, status = 'resolved'"),
+        ['fighter_b', 'mkt-dispute-1'],
       );
+      expect(pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO admin_audit_log'),
+        ['admin-1', 'market_force_resolve', 'mkt-dispute-1', expect.any(Object), expect.any(Object)],
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ tx_hash: 'mock-dispute-tx-hash' });
     });
 
-    it('throws 400 if final_outcome is missing', async () => {
+    it('returns 401 when the TOTP code is invalid', async () => {
+      (verifyToken as jest.Mock).mockReturnValue(false);
       const { req, res } = mockReqRes({
         params: { market_id: 'mkt-dispute-1' },
-        body: {},
+        body: { totp_code: '000000', outcome: 'fighter_b' },
+      });
+
+      await expect(resolveDispute(req, res)).rejects.toMatchObject({ statusCode: 401 });
+      expect(adminOverrideResult).not.toHaveBeenCalled();
+    });
+
+    it('loads the enabled admin TOTP secret from the database when no environment secret is set', async () => {
+      delete process.env.ADMIN_TOTP_SECRET;
+      (pool.query as jest.Mock).mockResolvedValueOnce({
+        rows: [{ two_factor_enabled: true, two_factor_secret: 'encrypted-secret' }],
+      });
+      (verifyToken as jest.Mock).mockReturnValue(false);
+      const { req, res } = mockReqRes({
+        params: { market_id: 'mkt-dispute-1' },
+        body: { totp_code: '000000', outcome: 'fighter_b' },
+      });
+      (req as unknown as Record<string, unknown>).userId = 'admin-1';
+
+      await expect(resolveDispute(req, res)).rejects.toMatchObject({ statusCode: 401 });
+      expect(decrypt).toHaveBeenCalledWith('encrypted-secret');
+      expect(verifyToken).toHaveBeenCalledWith('decrypted:encrypted-secret', '000000');
+    });
+
+    it('throws 400 if the TOTP code is missing', async () => {
+      const { req, res } = mockReqRes({
+        params: { market_id: 'mkt-dispute-1' },
+        body: { outcome: 'fighter_b' },
       });
 
       await expect(resolveDispute(req, res)).rejects.toMatchObject({ statusCode: 400 });
     });
 
-    it('throws 400 if final_outcome is invalid', async () => {
+    it('throws 400 if the outcome is invalid', async () => {
       const { req, res } = mockReqRes({
         params: { market_id: 'mkt-dispute-1' },
-        body: { final_outcome: 'invalid_outcome' },
+        body: { totp_code: '123456', outcome: 'invalid_outcome' },
       });
 
       await expect(resolveDispute(req, res)).rejects.toMatchObject({ statusCode: 400 });
@@ -411,7 +479,7 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
 
       const { req, res } = mockReqRes({
         params: { market_id: 'mkt-dispute-1' },
-        body: { final_outcome: 'fighter_a' },
+        body: { totp_code: '123456', outcome: 'fighter_a' },
       });
 
       await expect(resolveDispute(req, res)).rejects.toMatchObject({ statusCode: 400 });
@@ -424,7 +492,7 @@ describe('AdminController — Two-Phase Dispute Flow', () => {
 
       const { req, res } = mockReqRes({
         params: { market_id: 'mkt-dispute-1' },
-        body: { final_outcome: 'fighter_a' },
+        body: { totp_code: '123456', outcome: 'fighter_a' },
       });
 
       await expect(resolveDispute(req, res)).rejects.toMatchObject({ statusCode: 400 });
