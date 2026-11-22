@@ -1,9 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
-import { createHmac, timingSafeEqual } from 'crypto';
 import { AppError } from '../../utils/AppError';
 import { validate } from '../../middleware/validation.middleware';
 import * as OracleService from '../../oracle/OracleService';
-import { redis } from '../../config/redis';
 import { z } from 'zod';
 import { pool } from '../../config/db';
 
@@ -22,7 +20,6 @@ const submitOracleResultSchema = z.object({
     .datetime({ message: 'reported_at must be a valid ISO 8601 datetime string' }),
   signature: z
     .string()
-    .regex(/^[0-9a-fA-F]+$/, 'signature must be a hex-encoded string')
     .min(1, 'signature is required'),
   oracle_address: z
     .string()
@@ -31,13 +28,9 @@ const submitOracleResultSchema = z.object({
 
 export const validateSubmitOracleResult = validate(submitOracleResultSchema, 'body');
 
-const RATE_LIMIT_TTL = 60; // seconds
-
 /**
  * POST /api/oracle/submit
- * 1. Verify HMAC-SHA256 signature using ORACLE_HMAC_SECRET
- * 2. Rate-limit: 1 submission per match_id per 60 seconds (Redis)
- * 3. Respond 202 immediately; call OracleService.submitFightResult() async
+ * Verify the signed report before submitting the fight result.
  */
 export async function submitOracleResult(
   req: Request,
@@ -45,47 +38,34 @@ export async function submitOracleResult(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const hmacSecret = process.env.ORACLE_HMAC_SECRET;
-    if (!hmacSecret) {
-      return next(new AppError(500, 'ORACLE_HMAC_SECRET is not configured'));
-    }
-
     const { match_id, outcome, reported_at, signature, oracle_address } =
       req.body as z.infer<typeof submitOracleResultSchema>;
 
-    // Step 1 — Verify HMAC-SHA256 signature
-    // Canonical message: match_id|outcome|reported_at|oracle_address
-    const message = `${match_id}|${outcome}|${reported_at}|${oracle_address}`;
-    const expected = createHmac('sha256', hmacSecret).update(message).digest('hex');
+    const report = {
+      id: 0,
+      match_id,
+      outcome,
+      reported_at: new Date(reported_at),
+      signature,
+      oracle_address,
+      accepted: false,
+      tx_hash: null,
+      created_at: new Date(),
+    };
 
-    let sigValid = false;
-    try {
-      sigValid = timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
-    } catch {
-      sigValid = false;
+    if (!(await OracleService.verifyOracleReport(report))) {
+      return next(new AppError(401, 'Invalid oracle report signature'));
     }
 
-    if (!sigValid) {
-      return next(new AppError(401, 'Invalid HMAC signature'));
+    const submittedReport = await OracleService.submitFightResult(match_id, outcome);
+    if (!submittedReport.tx_hash) {
+      throw new AppError(500, 'Oracle report submission did not return a transaction hash');
     }
 
-    // Step 2 — Rate-limit: 1 submission per match_id per 60 seconds
-    const rateLimitKey = `oracle:ratelimit:${match_id}`;
-    const existing = await redis.set(rateLimitKey, '1', 'EX', RATE_LIMIT_TTL, 'NX');
-    if (existing === null) {
-      return next(new AppError(429, `Rate limit exceeded: match_id ${match_id} already submitted within 60 seconds`));
-    }
-
-    // Step 3 — Respond 202 immediately
-    res.status(202).json({ message: 'Accepted' });
-
-    // Step 4 — Async resolution (fire-and-forget)
-    OracleService.submitFightResult(match_id, outcome as OracleService.FightOutcome).catch(
-      (err) => {
-        // Log but don't crash — response already sent
-        console.error({ err, match_id, outcome }, 'submitOracleResult: async submitFightResult failed');
-      },
-    );
+    res.status(200).json({
+      tx_hash: submittedReport.tx_hash,
+      report_id: submittedReport.id,
+    });
   } catch (err) {
     next(err);
   }

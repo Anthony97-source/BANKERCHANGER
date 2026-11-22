@@ -1978,11 +1978,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ matchId, winningOutcome ]
+              required: [ match_id, outcome, reported_at, signature, oracle_address ]
               properties:
-                matchId: { type: string }
-                winningOutcome: { type: integer, enum: [ 0, 1 ] }
-                reportedAt: { type: string, format: date-time }
+                match_id: { type: string }
+                outcome: { type: string, enum: [ fighter_a, fighter_b, draw, no_contest ] }
+                reported_at: { type: string, format: date-time }
+                signature: { type: string, description: Hex-encoded Ed25519 signature }
+                oracle_address: { type: string, description: Stellar public key of the signing oracle }
       responses:
         '200':
           description: Oracle result submitted
@@ -1993,13 +1995,13 @@ paths:
                 properties:
                   tx_hash: { type: string }
                   report_id: { type: integer }
-        '400':
+        '422':
           description: Invalid request body
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse400' }
+              schema: { $ref: '#/components/schemas/ErrorResponse422' }
         '401':
-          description: Missing or invalid oracle API key
+          description: Missing or invalid oracle API key or report signature
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse401' }
