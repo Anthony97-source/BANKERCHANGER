@@ -1,0 +1,28 @@
+import type { Market } from '../src/types';
+
+export const marketFixture: Market = {
+  market_id: 'market-1',
+  contract_address: 'CA-test-1',
+  match_id: 'match-1',
+  fighter_a: 'Fighter A',
+  fighter_b: 'Fighter B',
+  weight_class: 'Welterweight',
+  title_fight: false,
+  venue: 'Las Vegas',
+  scheduled_at: '2030-01-01T20:00:00.000Z',
+  status: 'open',
+  outcome: null,
+  pool_a: '1000000000',
+  pool_b: '1000000000',
+  pool_draw: '500000000',
+  total_pool: '2500000000',
+  fee_bps: 250,
+  resolved_at: null,
+  oracle_used: null,
+  created_at: '2029-01-01T00:00:00.000Z',
+  updated_at: '2029-01-01T00:00:00.000Z',
+  ledger_sequence: 1000,
+  odds_a: 5000,
+  odds_b: 5000,
+  odds_draw: 2500,
+};
