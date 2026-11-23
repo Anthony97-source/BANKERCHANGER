@@ -79,7 +79,7 @@ router.get('/disputes', requireAdmin, async (req: Request, res: Response, next: 
  * @swagger
  * /admin/dispute/{market_id}:
  *   post:
- *     summary: Flag a market dispute (admin only)
+ *     summary: Dispute a resolved market (admin only)
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -89,11 +89,33 @@ router.get('/disputes', requireAdmin, async (req: Request, res: Response, next: 
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason:
+ *                 type: string
  *     responses:
  *       200:
- *         description: Dispute flagged
+ *         description: Market disputed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [tx_hash]
+ *               properties:
+ *                 tx_hash:
+ *                   type: string
  *       401:
  *         description: Unauthorized
+ *       403:
+ *         description: Admin role required
+ *       400:
+ *         description: Market is not resolved
  */
 router.post('/dispute/:market_id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -179,19 +201,31 @@ router.post('/cancel/:market_id/refunds', requireAdmin, async (req: Request, res
  *         application/json:
  *           schema:
  *             type: object
- *             required: [action]
+ *             required: [totp_code, outcome]
  *             properties:
- *               action:
+ *               totp_code:
  *                 type: string
- *                 enum: [DISMISS, RESOLVE_NEW_OUTCOME]
- *               newWinningOutcome:
- *                 type: integer
- *                 enum: [0, 1]
+ *                 pattern: '^[0-9]{6}$'
+ *               outcome:
+ *                 type: string
+ *                 enum: [fighter_a, fighter_b, draw, no_contest]
  *     responses:
  *       200:
  *         description: Dispute resolved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [tx_hash]
+ *               properties:
+ *                 tx_hash:
+ *                   type: string
  *       401:
- *         description: Unauthorized
+ *         description: Unauthorized or invalid TOTP code
+ *       403:
+ *         description: Admin role required
+ *       400:
+ *         description: Invalid outcome or market state
  */
 router.post('/resolve-dispute/:market_id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -205,7 +239,7 @@ router.post('/resolve-dispute/:market_id', requireAdmin, async (req: Request, re
  * @swagger
  * /admin/cancel/{market_id}:
  *   post:
- *     summary: Cancel a market (admin only)
+ *     summary: Cancel an open or locked market (admin only)
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -215,11 +249,33 @@ router.post('/resolve-dispute/:market_id', requireAdmin, async (req: Request, re
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason:
+ *                 type: string
  *     responses:
  *       200:
  *         description: Market cancelled
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [tx_hash]
+ *               properties:
+ *                 tx_hash:
+ *                   type: string
  *       401:
  *         description: Unauthorized
+ *       403:
+ *         description: Admin role required
+ *       400:
+ *         description: Market is not open or locked
  */
 router.post('/cancel/:market_id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {

@@ -5,6 +5,7 @@ import {
     getMarket,
     getMarketBets,
     getMarketOdds,
+    getLiveMarketOdds,
     streamMarketOdds,
     getMarketStats,
     getPlatformStats,
@@ -134,6 +135,24 @@ router.get('/:market_id/odds/stream', streamMarketOdds);
  *         description: Current odds
  */
 router.get('/:market_id/odds', getMarketOdds);
+
+/**
+ * @swagger
+ * /markets/{market_id}/live-odds:
+ *   get:
+ *     summary: Get uncached odds computed from current market pools
+ *     tags: [Markets]
+ *     parameters:
+ *       - in: path
+ *         name: market_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Current basis-point odds and normalized probabilities
+ */
+router.get('/:market_id/live-odds', getLiveMarketOdds);
 
 /**
  * @swagger

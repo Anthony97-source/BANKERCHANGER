@@ -312,6 +312,7 @@ components:
         total_staked_xlm: { type: number }
         total_won_xlm: { type: number }
         total_lost_xlm: { type: number }
+        net_xlm: { type: number }
         win_rate: { type: number }
 
     Portfolio:
@@ -1832,10 +1833,52 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Portfolio summary
+          description: Portfolio summary with active bets in open/locked markets and past bets in resolved markets. Amount totals are in XLM; the result is cached for 30 seconds.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Portfolio' }
+        '400':
+          description: Invalid Stellar address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse400' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse429' }
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse500' }
+
+  /api/portfolio/{address}/roi:
+    get:
+      summary: Get portfolio ROI and resolved-bet performance
+      description: Returns ROI and win rate as percentages and the current streak as a signed bet count. Results are cached for 60 seconds.
+      operationId: getPortfolioRoi
+      tags: [ Bets ]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Portfolio ROI, resolved-bet win rate, and current streak
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ address, roi, win_rate, streak ]
+                properties:
+                  address: { type: string }
+                  roi: { type: number, description: ROI percentage }
+                  win_rate: { type: number, description: Percentage of resolved bets on the winning side }
+                  streak:
+                    type: integer
+                    description: "Positive for consecutive wins, negative for consecutive losses"
         '400':
           description: Invalid Stellar address
           content:
@@ -2036,11 +2079,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ matchId, winningOutcome ]
+              required: [ match_id, outcome, reported_at, signature, oracle_address ]
               properties:
-                matchId: { type: string }
-                winningOutcome: { type: integer, enum: [ 0, 1 ] }
-                reportedAt: { type: string, format: date-time }
+                match_id: { type: string }
+                outcome: { type: string, enum: [ fighter_a, fighter_b, draw, no_contest ] }
+                reported_at: { type: string, format: date-time }
+                signature: { type: string, description: Hex-encoded Ed25519 signature }
+                oracle_address: { type: string, description: Stellar public key of the signing oracle }
       responses:
         '200':
           description: Oracle result submitted
@@ -2051,13 +2096,13 @@ paths:
                 properties:
                   tx_hash: { type: string }
                   report_id: { type: integer }
-        '400':
+        '422':
           description: Invalid request body
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse400' }
+              schema: { $ref: '#/components/schemas/ErrorResponse422' }
         '401':
-          description: Missing or invalid oracle API key
+          description: Missing or invalid oracle API key or report signature
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse401' }
@@ -2084,22 +2129,30 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Oracle reports for the fight
+          description: Oracle reports for the fight in descending reported_at order; reports is empty when none exist
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/OracleReport' }
+                type: object
+                required: [ match_id, reports ]
+                properties:
+                  match_id: { type: string }
+                  reports:
+                    type: array
+                    items:
+                      type: object
+                      required: [ oracle_address, outcome, reported_at, tx_hash, accepted ]
+                      properties:
+                        oracle_address: { type: string }
+                        outcome: { type: string }
+                        reported_at: { type: string, format: date-time }
+                        tx_hash: { type: string, nullable: true }
+                        accepted: { type: boolean }
         '400':
           description: Invalid match ID format
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse400' }
-        '404':
-          description: No reports found
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
         '429':
           description: Rate limit exceeded
           content:
