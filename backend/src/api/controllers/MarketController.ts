@@ -364,6 +364,34 @@ export async function getPortfolio(req: Request, res: Response, next: NextFuncti
 }
 
 /**
+ * GET /api/portfolio/:address/roi
+ *
+ * Returns ROI, win rate, and the current resolved-bet streak for a Stellar address.
+ */
+export async function getPortfolioRoi(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const parseResult = portfolioAddressSchema.safeParse({ address: req.params.address });
+    if (!parseResult.success) {
+      const errors = parseResult.error.issues.map((e) => ({
+        field: e.path.join('.'),
+        message: e.message,
+      }));
+      res.status(400).json({ errors });
+      return;
+    }
+
+    const roi = await MarketService.getPortfolioRoiByAddress(parseResult.data.address);
+    res.status(200).json(roi);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/bets/:bettor_address
  *
  * Returns all bets placed by a given Stellar address across all markets.

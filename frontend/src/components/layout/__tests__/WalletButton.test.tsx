@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, act } from '@testing-library/react';
+import '@testing-library/jest-dom';
 import React from 'react';
 import { WalletButton } from '../WalletButton';
 
@@ -61,5 +62,17 @@ describe('WalletButton Connected State (#922)', () => {
     // Test disconnect
     fireEvent.click(disconnectBtn);
     expect(mockDisconnect).toHaveBeenCalled();
+  });
+
+  it('closes the wallet menu and restores focus when Escape is pressed', () => {
+    render(<WalletButton />);
+    const trigger = screen.getByRole('button', { name: /wallet menu/i });
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });
