@@ -32,8 +32,9 @@ import disputesRouter from "./routes/disputes.routes";
 import oracleRouter from "./routes/oracle.routes";
 import walletsRouter from "./routes/wallets.routes";
 import notificationsRouter from "./routes/notifications.routes";
+import leaderboardRouter from "./routes/leaderboard.routes";
 import engagementRouter from "./routes/engagement.routes";
-import { getPortfolio, getPlatformStats } from "./api/controllers/MarketController";
+import { getPortfolio, getPortfolioRoi, getPlatformStats } from "./api/controllers/MarketController";
 import claimsRouter from "./routes/bet.routes";
 import { startAutoResolutionCron, startAutoLockCron } from "./cron/autoResolution.cron";
 import { startCleanupCron } from "./cron/cleanup.cron";
@@ -143,6 +144,7 @@ app.get("/health/detailed", requireAdminJwt, async (_req, res) => {
 
 // Rate-limited route groups
 app.use("/auth", rateLimit({ windowMs: 60_000, max: 10, keyBy: "ip" }));
+app.use("/api", healthRouter);
 app.use("/api", rateLimit({ windowMs: 60_000, max: 60, keyBy: "ip" })); // Public endpoints
 app.use("/api/oracle", rateLimit({ windowMs: 60_000, max: 10, keyBy: "ip" })); // Oracle endpoint stricter
 app.use("/api/admin", rateLimit({ windowMs: 60_000, max: 20, keyBy: "ip" })); // Admin endpoints
@@ -159,12 +161,14 @@ app.use("/api/engagement", engagementRouter);
 app.use("/api/claims", claimsRouter);
 app.use("/api/bets", claimsRouter);
 app.get("/api/stats", getPlatformStats);
+app.get("/api/portfolio/:address/roi", getPortfolioRoi);
 app.get("/api/portfolio/:address", getPortfolio);
 app.use("/api/users", usersRouter);
 app.use("/api/disputes", disputesRouter);
 app.use("/api/oracle", oracleRouter);
 app.use("/api/wallets", walletsRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/admin", adminRouter);
 app.use(operationsRouter);
 

@@ -28,10 +28,13 @@ const mockBet = {
 
 const mockStats = {
   market_id: 'market-1',
-  total_bets: 10,
-  total_volume: '1000',
-  fighter_a_volume: '600',
-  fighter_b_volume: '400',
+  total_bets_count: 10,
+  total_volume_xlm: 1000,
+  odds_a: 6000,
+  odds_b: 3000,
+  odds_draw: 1000,
+  top_bettors: [{ bettor_address: mockBet.bettor_address, volume_xlm: 100 }],
+  betting_distribution: { A: 60, B: 30, DRAW: 10 },
 };
 
 const mockPlatformStats = {
@@ -39,6 +42,15 @@ const mockPlatformStats = {
   activeMarkets: 3,
   totalVolume: '50000',
   totalBets: 200,
+};
+
+const mockPlatformMarketStats = {
+  total_markets_count: 5,
+  total_volume_xlm: 5000,
+  total_bets_count: 200,
+  live_markets_count: 3,
+  unique_bettors_count: 75,
+  platform_fees_collected_xlm: 25,
 };
 
 beforeEach(() => {
@@ -131,14 +143,40 @@ describe('GET /api/markets', () => {
   });
 });
 
+describe('GET /api/recent-markets', () => {
+  it('returns recent market summaries', async () => {
+    const recentMarkets = [{
+      fighter_a: 'Fighter A',
+      fighter_b: 'Fighter B',
+      status: 'open',
+      total_pool_xlm: 12.5,
+      created_at: '2026-11-22T12:00:00.000Z',
+    }];
+    (MarketService.getRecentMarkets as jest.Mock).mockResolvedValue(recentMarkets);
+
+    const res = await request(app).get('/api/recent-markets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(recentMarkets);
+  });
+});
+
 describe('GET /api/markets/:id', () => {
   it('returns 200 with market data', async () => {
-    (MarketService.getMarketById as jest.Mock).mockResolvedValue(mockMarket);
+    const marketWithOdds = {
+      ...mockMarket,
+      odds: { odds_a: 5000, odds_b: 3000, odds_draw: 2000 },
+    };
+    (MarketService.getMarketById as jest.Mock).mockResolvedValue(marketWithOdds);
 
     const res = await request(app).get('/api/markets/market-1');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ market_id: 'market-1' });
+    expect(res.body).toMatchObject({
+      market_id: 'market-1',
+      odds: { odds_a: 5000, odds_b: 3000, odds_draw: 2000 },
+    });
+    expect(MarketService.getMarketById).toHaveBeenCalledWith('market-1');
   });
 
   it('returns 404 when market not found', async () => {
@@ -150,6 +188,83 @@ describe('GET /api/markets/:id', () => {
     const res = await request(app).get('/api/markets/nonexistent');
 
     expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Market not found' });
+  });
+});
+
+describe('GET /api/markets/:id/bets', () => {
+  it('returns all market bets when no address is provided', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([mockBet]);
+
+    const res = await request(app).get('/api/markets/market-1/bets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([mockBet]);
+    expect(MarketService.getBetsByMarket).toHaveBeenCalledWith('market-1', undefined);
+  });
+
+  it('filters bets by a valid Stellar address', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([mockBet]);
+
+    const res = await request(app).get(
+      `/api/markets/market-1/bets?address=${mockBet.bettor_address}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([mockBet]);
+    expect(MarketService.getBetsByMarket).toHaveBeenCalledWith(
+      'market-1',
+      mockBet.bettor_address,
+    );
+  });
+
+  it('returns 400 for an invalid Stellar address', async () => {
+    const res = await request(app).get('/api/markets/market-1/bets?address=invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Invalid Stellar address format' });
+    expect(MarketService.getBetsByMarket).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array when the market has no bets', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app).get('/api/markets/market-1/bets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+describe('GET /api/bets/:bettor_address', () => {
+  const bettorAddress = mockBet.bettor_address;
+
+  it('returns all bets as an array sorted newest first', async () => {
+    const olderBet = { ...mockBet, bet_id: 'older', placed_at: '2025-01-01T00:00:00.000Z' };
+    const newerBet = { ...mockBet, bet_id: 'newer', placed_at: '2026-01-01T00:00:00.000Z' };
+    (MarketService.getBetsByAddress as jest.Mock).mockResolvedValue([olderBet, newerBet]);
+
+    const res = await request(app).get(`/api/bets/${bettorAddress}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([newerBet, olderBet]);
+    expect(MarketService.getBetsByAddress).toHaveBeenCalledWith(bettorAddress);
+  });
+
+  it('returns 400 for an invalid Stellar address', async () => {
+    const res = await request(app).get('/api/bets/invalid-address');
+
+    expect(res.status).toBe(400);
+    expect(MarketService.getBetsByAddress).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array when the address has no bets', async () => {
+    (MarketService.getBetsByAddress as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app).get(`/api/bets/${bettorAddress}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
   });
 });
 
@@ -160,7 +275,7 @@ describe('GET /api/markets/:id/odds', () => {
     const res = await request(app).get('/api/markets/market-1/stats');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ market_id: 'market-1' });
+    expect(res.body).toEqual(mockStats);
   });
 
   it('returns 404 when market not found', async () => {
@@ -172,6 +287,24 @@ describe('GET /api/markets/:id/odds', () => {
     const res = await request(app).get('/api/markets/nonexistent/stats');
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/markets/:id/live-odds', () => {
+  it('returns live odds without allowing response caching', async () => {
+    const odds = {
+      odds_a: 6000,
+      odds_b: 3000,
+      odds_draw: 1000,
+      implied_probabilities: { fighter_a: 60, fighter_b: 30, draw: 10 },
+    };
+    (MarketService.getLiveMarketOdds as jest.Mock).mockResolvedValue(odds);
+
+    const res = await request(app).get('/api/markets/market-1/live-odds');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body).toEqual(odds);
   });
 });
 
@@ -205,5 +338,32 @@ describe('GET /api/stats', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject(mockPlatformStats);
+  });
+});
+
+describe('GET /api/market-stats', () => {
+  it('returns aggregated market statistics', async () => {
+    (MarketService.getPlatformMarketStats as jest.Mock).mockResolvedValue(mockPlatformMarketStats);
+
+    const res = await request(app).get('/api/market-stats');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(mockPlatformMarketStats);
+  });
+
+  it('returns zeroed statistics with 200 if the stats service rejects', async () => {
+    (MarketService.getPlatformMarketStats as jest.Mock).mockRejectedValue(new Error('database unavailable'));
+
+    const res = await request(app).get('/api/market-stats');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      total_markets_count: 0,
+      total_volume_xlm: 0,
+      total_bets_count: 0,
+      live_markets_count: 0,
+      unique_bettors_count: 0,
+      platform_fees_collected_xlm: 0,
+    });
   });
 });

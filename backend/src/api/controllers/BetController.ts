@@ -95,7 +95,8 @@ export async function getBettorStats(
 /**
  * GET /api/bets/:bettor_address
  *
- * Returns paginated bets placed by a given Stellar address.
+ * Returns all bets as a Bet[] when no pagination parameters are provided.
+ * Cursor/page pagination remains available when explicitly requested.
  * Validates the Stellar address format and returns 400 Bad Request if invalid.
  */
 export async function getBetsByAddress(
@@ -105,6 +106,11 @@ export async function getBetsByAddress(
 ): Promise<void> {
   try {
     const { bettor_address } = req.params;
+    const hasPaginationOptions =
+      req.query.cursor !== undefined ||
+      req.query.page !== undefined ||
+      req.query.offset !== undefined ||
+      req.query.limit !== undefined;
     const legacyPage = req.query.page !== undefined;
     const legacyOffset = req.query.offset !== undefined ? parseInt(req.query.offset as string, 10) : undefined;
     const page = legacyPage ? parseInt(req.query.page as string, 10) : 1;
@@ -130,6 +136,13 @@ export async function getBetsByAddress(
         'Invalid Stellar address format',
         ERROR_CODES.INVALID_REQUEST
       );
+    }
+
+    if (!hasPaginationOptions) {
+      const bets = await MarketService.getBetsByAddress(bettor_address);
+      bets.sort((a, b) => b.placed_at.getTime() - a.placed_at.getTime());
+      res.status(200).json(bets);
+      return;
     }
 
     const result = await BetService.fetchBetsByAddress(

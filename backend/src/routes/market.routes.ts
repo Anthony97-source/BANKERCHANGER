@@ -4,8 +4,8 @@ import {
     listMarketsValidation,
     getMarket,
     getMarketBets,
-    getMarketBetsValidation,
     getMarketOdds,
+    getLiveMarketOdds,
     streamMarketOdds,
     getMarketStats,
     getPlatformStats,
@@ -69,7 +69,7 @@ router.get('/', listMarketsValidation, listMarkets);
  *           type: string
  *     responses:
  *       200:
- *         description: Market details
+ *         description: Market details including current odds
  *       404:
  *         description: Market not found
  */
@@ -88,20 +88,17 @@ router.get('/:market_id', getMarket);
  *         schema:
  *           type: string
  *       - in: query
- *         name: page
+ *         name: address
+ *         description: Filter bets to a valid Stellar public key.
  *         schema:
- *           type: integer
- *           default: 1
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 20
+ *           type: string
  *     responses:
  *       200:
- *         description: Paginated list of bets
+ *         description: Bets for the market, or an empty array when none exist
+ *       400:
+ *         description: Invalid Stellar address format
  */
-router.get('/:market_id/bets', getMarketBetsValidation, getMarketBets);
+router.get('/:market_id/bets', getMarketBets);
 
 /**
  * @swagger
@@ -141,9 +138,9 @@ router.get('/:market_id/odds', getMarketOdds);
 
 /**
  * @swagger
- * /markets/{market_id}/stats:
+ * /markets/{market_id}/live-odds:
  *   get:
- *     summary: Get statistics for a market
+ *     summary: Get uncached odds computed from current market pools
  *     tags: [Markets]
  *     parameters:
  *       - in: path
@@ -153,7 +150,28 @@ router.get('/:market_id/odds', getMarketOdds);
  *           type: string
  *     responses:
  *       200:
- *         description: Market statistics
+ *         description: Current basis-point odds and normalized probabilities
+ */
+router.get('/:market_id/live-odds', getLiveMarketOdds);
+
+/**
+ * @swagger
+ * /markets/{market_id}/stats:
+ *   get:
+ *     summary: Get statistics for a market
+ *     description: Returns bet counts and volume, live odds, the five highest-volume bettors, and the pool betting distribution. Cached for 60 seconds.
+ *     tags: [Markets]
+ *     parameters:
+ *       - in: path
+ *         name: market_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Market betting statistics
+ *       404:
+ *         description: Market not found
  */
 router.get('/:market_id/stats', getMarketStats);
 

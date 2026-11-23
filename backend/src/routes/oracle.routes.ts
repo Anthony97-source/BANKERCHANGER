@@ -1,11 +1,20 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import {
   submitOracleResult,
   validateSubmitOracleResult,
   getOracleReports,
 } from '../api/controllers/OracleController';
+import { AppError } from '../utils/AppError';
 
 const router = Router();
+
+function requireOracleApiKey(req: Request, _res: Response, next: NextFunction): void {
+  const expectedKey = process.env.ORACLE_API_KEY;
+  if (!expectedKey || req.get('X-Oracle-Key') !== expectedKey) {
+    return next(AppError.unauthorized('Invalid or missing X-Oracle-Key header'));
+  }
+  next();
+}
 
 /**
  * @swagger
@@ -33,25 +42,41 @@ const router = Router();
  *         application/json:
  *           schema:
  *             type: object
- *             required: [matchId, winningOutcome]
+ *             required: [match_id, outcome, reported_at, signature, oracle_address]
  *             properties:
- *               matchId:
+ *               match_id:
  *                 type: string
- *               winningOutcome:
- *                 type: integer
- *                 enum: [0, 1]
- *               reportedAt:
+ *               outcome:
+ *                 type: string
+ *                 enum: [fighter_a, fighter_b, draw, no_contest]
+ *               reported_at:
  *                 type: string
  *                 format: date-time
+ *               signature:
+ *                 type: string
+ *                 description: Hex-encoded Ed25519 signature
+ *               oracle_address:
+ *                 type: string
+ *                 description: Stellar public key of the signing oracle
  *     responses:
  *       200:
  *         description: Oracle result submitted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [tx_hash, report_id]
+ *               properties:
+ *                 tx_hash:
+ *                   type: string
+ *                 report_id:
+ *                   type: integer
  *       401:
- *         description: Invalid or missing API key
- *       400:
+ *         description: Invalid API key or oracle report signature
+ *       422:
  *         description: Validation error
  */
-router.post('/submit', validateSubmitOracleResult, submitOracleResult);
+router.post('/submit', requireOracleApiKey, validateSubmitOracleResult, submitOracleResult);
 
 /**
  * @swagger
@@ -67,9 +92,7 @@ router.post('/submit', validateSubmitOracleResult, submitOracleResult);
  *           type: string
  *     responses:
  *       200:
- *         description: List of oracle reports for the match
- *       404:
- *         description: No reports found
+ *         description: Oracle reports for the match, newest first; an empty list is returned when none exist
  */
 router.get('/reports/:match_id', getOracleReports);
 

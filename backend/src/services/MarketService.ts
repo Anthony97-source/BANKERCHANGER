@@ -4,7 +4,7 @@
 // Contributors: implement every function marked TODO.
 // ============================================================
 
-import type { Market, MarketStats, PlatformStats } from '../models/Market';
+import type { Market, MarketStats, PlatformMarketStats, PlatformStats, RecentMarketSummary } from '../models/Market';
 import type { Bet } from '../models/Bet';
 import { pool } from '../config/db';
 import * as cache from './cache.service';
@@ -232,6 +232,14 @@ export interface MarketOdds {
   odds_draw: number;
 }
 
+export interface LiveMarketOdds extends MarketOdds {
+  implied_probabilities: {
+    fighter_a: number;
+    fighter_b: number;
+    draw: number;
+  };
+}
+
 export interface MarketWithOdds extends Market {
   odds: MarketOdds;
 }
@@ -259,7 +267,15 @@ export interface Portfolio {
   total_staked_xlm: number;
   total_won_xlm: number;
   total_lost_xlm: number;
+  net_xlm: number;
   pending_claims: Bet[];
+}
+
+export interface PortfolioRoi {
+  address: string;
+  roi: number;
+  win_rate: number;
+  streak: number;
 }
 
 export interface BettorStats {
@@ -404,13 +420,39 @@ export async function getMarkets(
 }
 
 /**
+ * Returns the ten most recently created markets, cached for five minutes.
+ */
+export async function getRecentMarkets(): Promise<RecentMarketSummary[]> {
+  const cacheKey = 'markets:recent';
+  const cached = await cache.get<RecentMarketSummary[]>(cacheKey);
+  if (cached) return cached;
+
+  const { rows } = await marketQuery(
+    `SELECT fighter_a, fighter_b, status, total_pool, created_at
+     FROM markets
+     ORDER BY created_at DESC
+     LIMIT 10`,
+  );
+  const markets: RecentMarketSummary[] = rows.map((row) => ({
+    fighter_a: row.fighter_a,
+    fighter_b: row.fighter_b,
+    status: row.status,
+    total_pool_xlm: (Number(row.total_pool) || 0) / 10_000_000,
+    created_at: new Date(row.created_at),
+  }));
+
+  await cache.set(cacheKey, markets, 300);
+  return markets;
+}
+
+/**
  * Invalidates cache for a market when it's updated.
  * Clears the market cache and related pattern caches.
  */
 export async function invalidateMarketCache(market_id: string): Promise<void> {
   await cache.del(`market:${market_id}`);
   await cache.delPattern(`markets:*`);
-  await cache.del(`market:${market_id}:stats`);
+  await cache.del(`market:${market_id}:stats:v2`);
 }
 
 /**
@@ -431,10 +473,10 @@ export async function getMarketById(market_id: string): Promise<MarketWithOdds> 
   const market = await db().findMarketById(market_id);
   if (!market) throw AppError.notFound(`Market not found: ${market_id}`);
 
-  const odds = await calculateOdds(market_id);
+  const odds = await getMarketOdds(market_id);
   const result: MarketWithOdds = {
     ...market,
-    odds: { fighterA: odds.fighterA, fighterB: odds.fighterB, draw: odds.draw },
+    odds,
   };
 
   await cache.set(cacheKey, result, 10);
@@ -451,6 +493,28 @@ export async function getMarketById(market_id: string): Promise<MarketWithOdds> 
  * if DB pool sizes are stale (updated_at older than 30 seconds).
  */
 export async function getMarketOdds(market_id: string): Promise<MarketOdds> {
+  const { pool_a, pool_b, pool_draw, total_pool } = await getCurrentMarketPools(market_id);
+
+  // No bets placed yet — return equal implied probabilities (33.33%) instead
+  // of dividing by zero, which would surface as NaN/Infinity → null in JSON.
+  if (total_pool === 0n) {
+    const EQUAL_PROBABILITY_BPS = Math.round(10000 / 3);
+    return { odds_a: EQUAL_PROBABILITY_BPS, odds_b: EQUAL_PROBABILITY_BPS, odds_draw: EQUAL_PROBABILITY_BPS };
+  }
+
+  return {
+    odds_a: pool_a === 0n ? 0 : Number((pool_a * 10000n) / total_pool),
+    odds_b: pool_b === 0n ? 0 : Number((pool_b * 10000n) / total_pool),
+    odds_draw: pool_draw === 0n ? 0 : Number((pool_draw * 10000n) / total_pool),
+  };
+}
+
+async function getCurrentMarketPools(market_id: string): Promise<{
+  pool_a: bigint;
+  pool_b: bigint;
+  pool_draw: bigint;
+  total_pool: bigint;
+}> {
   const market = await db().findMarketById(market_id);
   if (!market) throw AppError.notFound(`Market not found: ${market_id}`);
 
@@ -474,18 +538,51 @@ export async function getMarketOdds(market_id: string): Promise<MarketOdds> {
     total_pool = BigInt(market.total_pool);
   }
 
-  // No bets placed yet — return equal implied probabilities (33.33%) instead
-  // of dividing by zero, which would surface as NaN/Infinity → null in JSON.
-  if (total_pool === 0n) {
-    const EQUAL_PROBABILITY_BPS = Math.round(10000 / 3);
-    return { odds_a: EQUAL_PROBABILITY_BPS, odds_b: EQUAL_PROBABILITY_BPS, odds_draw: EQUAL_PROBABILITY_BPS };
+  return {
+    pool_a,
+    pool_b,
+    pool_draw,
+    total_pool,
+  };
+}
+
+function normalizeOddsBps(poolA: bigint, poolB: bigint, poolDraw: bigint): [number, number, number] {
+  const pools = [poolA, poolB, poolDraw].map((pool) => pool > 0n ? pool : 0n);
+  const total = pools.reduce((sum, pool) => sum + pool, 0n);
+  if (total === 0n) return [3334, 3333, 3333];
+
+  const values = pools.map((pool) => ({
+    bps: Number((pool * 10_000n) / total),
+    remainder: (pool * 10_000n) % total,
+  }));
+  const remainder = 10_000 - values.reduce((sum, value) => sum + value.bps, 0);
+  const order = values
+    .map((value, index) => ({ index, remainder: value.remainder }))
+    .sort((a, b) => a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1);
+  for (let i = 0; i < remainder; i++) {
+    values[order[i].index].bps++;
   }
 
+  return [values[0].bps, values[1].bps, values[2].bps];
+}
+
+/**
+ * Returns real-time pool odds as normalized basis points and percentages.
+ * Does not use the cache; stale database pools are refreshed from Stellar RPC.
+ */
+export async function getLiveMarketOdds(market_id: string): Promise<LiveMarketOdds> {
+  const { pool_a, pool_b, pool_draw } = await getCurrentMarketPools(market_id);
+  const [odds_a, odds_b, odds_draw] = normalizeOddsBps(pool_a, pool_b, pool_draw);
 
   return {
-    odds_a: pool_a === 0n ? 0 : Number((pool_a * 10000n) / total_pool),
-    odds_b: pool_b === 0n ? 0 : Number((pool_b * 10000n) / total_pool),
-    odds_draw: pool_draw === 0n ? 0 : Number((pool_draw * 10000n) / total_pool),
+    odds_a,
+    odds_b,
+    odds_draw,
+    implied_probabilities: {
+      fighter_a: odds_a / 100,
+      fighter_b: odds_b / 100,
+      draw: odds_draw / 100,
+    },
   };
 }
 
@@ -705,26 +802,60 @@ export async function getBetsByMarket(
  * Results cached in Redis for 60 seconds.
  */
 export async function getMarketStats(market_id: string): Promise<MarketStats> {
-  const cacheKey = `market:${market_id}:stats`;
+  const cacheKey = `market:${market_id}:stats:v2`;
   const cached = await cache.get<MarketStats>(cacheKey);
   if (cached) return cached;
 
-  const bets = await db().findBetsByMarket(market_id);
+  const [bets, odds] = await Promise.all([
+    db().findBetsByMarket(market_id),
+    getMarketOdds(market_id),
+  ]);
+  const totalStroops = bets.reduce((sum, bet) => sum + BigInt(bet.amount), 0n);
+  const bettorVolumes = new Map<string, bigint>();
+  for (const bet of bets) {
+    bettorVolumes.set(
+      bet.bettor_address,
+      (bettorVolumes.get(bet.bettor_address) ?? 0n) + BigInt(bet.amount),
+    );
+  }
 
-  const total_bets = bets.length;
-  const unique_bettors = new Set(bets.map(b => b.bettor_address)).size;
-  const amounts_xlm = bets.map(b => Number(b.amount) / 10_000_000);
-  const largest_bet_xlm = amounts_xlm.length > 0 ? Math.max(...amounts_xlm) : 0;
-  const average_bet_xlm = amounts_xlm.length > 0 ? amounts_xlm.reduce((s, a) => s + a, 0) / amounts_xlm.length : 0;
-  const total_pooled_xlm = amounts_xlm.reduce((s, a) => s + a, 0);
+  const top_bettors = [...bettorVolumes.entries()]
+    .sort(([addressA, volumeA], [addressB, volumeB]) =>
+      volumeA === volumeB ? addressA.localeCompare(addressB) : volumeA > volumeB ? -1 : 1,
+    )
+    .slice(0, 5)
+    .map(([bettor_address, volume]) => ({
+      bettor_address,
+      volume_xlm: Number(volume) / 10_000_000,
+    }));
+
+  const oddsShares = [odds.odds_a, odds.odds_b, odds.odds_draw];
+  const oddsTotal = oddsShares.reduce((sum, share) => sum + share, 0);
+  const normalizedShares = oddsTotal > 0 ? oddsShares : [1, 1, 1];
+  const shareTotal = normalizedShares.reduce((sum, share) => sum + share, 0);
+  const scaledShares = normalizedShares.map((share) => (share * 10_000) / shareTotal);
+  const distributionHundredths = scaledShares.map(Math.floor);
+  let remainder = 10_000 - distributionHundredths.reduce((sum, share) => sum + share, 0);
+  const remainderOrder = scaledShares
+    .map((share, index) => ({ index, fraction: share - distributionHundredths[index] }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let index = 0; remainder > 0; index += 1, remainder -= 1) {
+    distributionHundredths[remainderOrder[index % remainderOrder.length].index] += 1;
+  }
 
   const stats: MarketStats = {
     market_id,
-    total_bets,
-    unique_bettors,
-    largest_bet_xlm,
-    average_bet_xlm,
-    total_pooled_xlm,
+    total_bets_count: bets.length,
+    total_volume_xlm: Number(totalStroops) / 10_000_000,
+    odds_a: odds.odds_a,
+    odds_b: odds.odds_b,
+    odds_draw: odds.odds_draw,
+    top_bettors,
+    betting_distribution: {
+      A: distributionHundredths[0] / 100,
+      B: distributionHundredths[1] / 100,
+      DRAW: distributionHundredths[2] / 100,
+    },
   };
 
   await cache.set(cacheKey, stats, 60);
@@ -735,13 +866,18 @@ export async function getMarketStats(market_id: string): Promise<MarketStats> {
  * Returns a portfolio summary for a Stellar address.
  *
  * active_bets:    bets in Open/Locked markets
- * past_bets:      bets in Resolved/Cancelled markets
+ * past_bets:      bets in Resolved markets
  * pending_claims: unclaimed winning bets in Resolved markets
  * Totals are computed in XLM (divide stroops by 10_000_000).
+ * Results are cached for 30 seconds.
  */
 export async function getPortfolioByAddress(
   bettor_address: string,
 ): Promise<Portfolio> {
+  const cacheKey = `portfolio:${bettor_address}`;
+  const cached = await cache.get<Portfolio>(cacheKey);
+  if (cached !== null) return cached;
+
   const bets = await db().findBetsByAddress(bettor_address);
   const marketIds = [...new Set(bets.map(b => b.market_id))];
   const markets = await Promise.all(marketIds.map(id => db().findMarketById(id)));
@@ -756,9 +892,9 @@ export async function getPortfolioByAddress(
     const status = market?.status;
     if (status === 'open' || status === 'locked') {
       active_bets.push(bet);
-    } else {
+    } else if (status === 'resolved') {
       past_bets.push(bet);
-      if (status === 'resolved' && !bet.claimed && market?.outcome === bet.side) {
+      if (!bet.claimed && market?.outcome === bet.side) {
         pending_claims.push(bet);
       }
     }
@@ -769,18 +905,79 @@ export async function getPortfolioByAddress(
     .filter(b => b.claimed && b.payout)
     .reduce((s, b) => s + Number(b.payout) / 10_000_000, 0);
   const total_lost_xlm = past_bets
-    .filter(b => !b.claimed && !pending_claims.includes(b))
+    .filter(b => marketMap.get(b.market_id)?.outcome !== b.side)
     .reduce((s, b) => s + Number(b.amount) / 10_000_000, 0);
 
-  return {
+  const portfolio: Portfolio = {
     address: bettor_address,
     active_bets,
     past_bets,
     total_staked_xlm,
     total_won_xlm,
     total_lost_xlm,
+    net_xlm: total_won_xlm - total_lost_xlm,
     pending_claims,
   };
+
+  await cache.set(cacheKey, portfolio, 30);
+  return portfolio;
+}
+
+/**
+ * Returns ROI and resolved-bet performance for an address.
+ * The result is cached for 60 seconds.
+ */
+export async function getPortfolioRoiByAddress(
+  bettor_address: string,
+): Promise<PortfolioRoi> {
+  const cacheKey = `portfolio:${bettor_address}:roi`;
+  const cached = await cache.get<PortfolioRoi>(cacheKey);
+  if (cached !== null) return cached;
+
+  const { rows } = await marketQuery(
+    `SELECT b.amount, b.payout, b.claimed, b.side,
+            m.status AS market_status, m.outcome, m.resolved_at, b.placed_at, b.id
+     FROM bets b
+     JOIN markets m ON b.market_id = m.market_id
+     WHERE b.bettor_address = $1
+     ORDER BY m.resolved_at DESC NULLS LAST, b.placed_at DESC, b.id DESC`,
+    [bettor_address],
+  );
+
+  const totalStaked = rows.reduce(
+    (total: number, bet: { amount: string }) => total + Number(bet.amount),
+    0,
+  );
+  const totalWon = rows.reduce(
+    (total: number, bet: { payout: string | null; claimed: boolean }) =>
+      total + (bet.claimed && bet.payout ? Number(bet.payout) : 0),
+    0,
+  );
+  const resolvedBets = rows.filter(
+    (bet: { market_status: string }) => bet.market_status === 'resolved',
+  );
+  const winCount = resolvedBets.filter(
+    (bet: { side: string; outcome: string | null }) => bet.side === bet.outcome,
+  ).length;
+
+  let streak = 0;
+  if (resolvedBets.length > 0) {
+    const firstBetWon = resolvedBets[0].side === resolvedBets[0].outcome;
+    for (const bet of resolvedBets) {
+      if ((bet.side === bet.outcome) !== firstBetWon) break;
+      streak += firstBetWon ? 1 : -1;
+    }
+  }
+
+  const result: PortfolioRoi = {
+    address: bettor_address,
+    roi: totalStaked === 0 ? 0 : Math.round(((totalWon - totalStaked) / totalStaked) * 10_000) / 100,
+    win_rate: resolvedBets.length === 0 ? 0 : Math.round((winCount / resolvedBets.length) * 10_000) / 100,
+    streak,
+  };
+
+  await cache.set(cacheKey, result, 60);
+  return result;
 }
 
 /**
@@ -892,6 +1089,65 @@ export async function getPlatformStats(): Promise<PlatformStats> {
 
   await cache.set(cacheKey, stats, 60);
   return stats;
+}
+
+const EMPTY_PLATFORM_MARKET_STATS: PlatformMarketStats = {
+  total_markets_count: 0,
+  total_volume_xlm: 0,
+  total_bets_count: 0,
+  live_markets_count: 0,
+  unique_bettors_count: 0,
+  platform_fees_collected_xlm: 0,
+};
+
+/**
+ * Returns all-time platform market statistics.
+ * Fees are counted for resolved markets with a winning pool; cancelled and
+ * no-contest markets do not collect a platform fee.
+ */
+export async function getPlatformMarketStats(): Promise<PlatformMarketStats> {
+  const cacheKey = 'platform:market-stats';
+  const cached = await cache.get<PlatformMarketStats>(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const { rows } = await marketQuery(`
+      SELECT
+        (SELECT COUNT(*) FROM markets) AS total_markets_count,
+        (SELECT COALESCE(SUM(total_pool::numeric), 0) FROM markets) AS total_volume_stroops,
+        (SELECT COUNT(*) FROM bets) AS total_bets_count,
+        (SELECT COUNT(*) FROM markets WHERE status = 'open') AS live_markets_count,
+        (SELECT COUNT(DISTINCT bettor_address) FROM bets) AS unique_bettors_count,
+        (
+          SELECT COALESCE(SUM(TRUNC(total_pool::numeric * fee_bps / 10000)), 0)
+          FROM markets
+          WHERE status = 'resolved'
+            AND outcome <> 'no_contest'
+            AND CASE outcome
+              WHEN 'fighter_a' THEN pool_a::numeric > 0
+              WHEN 'fighter_b' THEN pool_b::numeric > 0
+              WHEN 'draw' THEN pool_draw::numeric > 0
+              ELSE FALSE
+            END
+        ) AS platform_fees_stroops
+    `);
+
+    const row = rows[0];
+    const stats: PlatformMarketStats = {
+      total_markets_count: Number(row.total_markets_count) || 0,
+      total_volume_xlm: (Number(row.total_volume_stroops) || 0) / 10_000_000,
+      total_bets_count: Number(row.total_bets_count) || 0,
+      live_markets_count: Number(row.live_markets_count) || 0,
+      unique_bettors_count: Number(row.unique_bettors_count) || 0,
+      platform_fees_collected_xlm: (Number(row.platform_fees_stroops) || 0) / 10_000_000,
+    };
+
+    await cache.set(cacheKey, stats, 600);
+    return stats;
+  } catch (err) {
+    logger.error({ err }, 'MarketService.getPlatformMarketStats: failed to retrieve statistics');
+    return EMPTY_PLATFORM_MARKET_STATS;
+  }
 }
 
 // ---------------------------------------------------------------------------

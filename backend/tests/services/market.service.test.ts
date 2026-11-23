@@ -1,8 +1,10 @@
 import * as MarketServiceModule from '../../src/services/MarketService';
-import { setDbAdapter, getMarkets, getMarketById, getMarketOdds, getPortfolioByAddress, getBetsByMarket, simulateProjectedPayout } from '../../src/services/MarketService';
+import { setDbAdapter, getMarkets, getMarketById, getMarketOdds, getPortfolioByAddress, getPortfolioRoiByAddress, getBetsByMarket, simulateProjectedPayout } from '../../src/services/MarketService';
 import { AppError } from '../../src/utils/AppError';
 import type { Market } from '../../src/models/Market';
 import type { Bet } from '../../src/models/Bet';
+import { pool } from '../../src/config/db';
+import * as cache from '../../src/services/cache.service';
 
 // ── Mock cache so tests never touch Redis ────────────────────────────────────
 jest.mock('../../src/services/cache.service', () => ({
@@ -11,6 +13,8 @@ jest.mock('../../src/services/cache.service', () => ({
   del: jest.fn().mockResolvedValue(undefined),
   delPattern: jest.fn().mockResolvedValue(undefined),
 }));
+
+jest.mock('../../src/config/db', () => ({ pool: { query: jest.fn() } }));
 
 // ── Mock StellarService to avoid SDK compilation errors ──────────────────────
 jest.mock('../../src/services/StellarService', () => ({
@@ -44,6 +48,25 @@ function makeMarket(overrides: Partial<Market> = {}): Market {
     created_at: new Date(),
     updated_at: new Date(),
     ledger_sequence: 1000,
+    ...overrides,
+  };
+}
+
+function makeBet(overrides: Partial<Bet> = {}): Bet {
+  return {
+    id: 1,
+    market_id: 'mkt-1',
+    bettor_address: 'GAAA',
+    side: 'fighter_a',
+    amount: '0',
+    amount_xlm: 0,
+    odds_snapshot: null,
+    placed_at: new Date(),
+    claimed: false,
+    claimed_at: null,
+    payout: null,
+    tx_hash: 'tx-1',
+    ledger_sequence: 1,
     ...overrides,
   };
 }
@@ -93,6 +116,11 @@ describe('MarketService', () => {
     await expect(getMarketById('unknown')).rejects.toBeInstanceOf(AppError);
   });
 
+  it('getMarketById() includes live odds from getMarketOdds()', async () => {
+    const market = await getMarketById('mkt-1');
+    expect(market.odds).toEqual({ odds_a: 3333, odds_b: 3333, odds_draw: 3333 });
+  });
+
   // 4 ─────────────────────────────────────────────────────────────────────────
   it('getMarketOdds() returns equal implied probabilities (33.33%) for empty pools', async () => {
     const odds = await getMarketOdds('mkt-1'); // pool totals are all '0'
@@ -121,6 +149,79 @@ describe('MarketService', () => {
     expect(odds).toEqual({ odds_a: 6000, odds_b: 3000, odds_draw: 1000 });
   });
 
+  it('getMarketStats() reports volume, live odds, top five bettors, and a normalized distribution', async () => {
+    const bets = [
+      makeBet({ id: 1, bettor_address: 'GX', side: 'fighter_a', amount: '20000000' }),
+      makeBet({ id: 2, bettor_address: 'GX', side: 'fighter_b', amount: '10000000' }),
+      makeBet({ id: 3, bettor_address: 'GY', side: 'fighter_b', amount: '50000000' }),
+      makeBet({ id: 4, bettor_address: 'GZ', side: 'draw', amount: '10000000' }),
+      makeBet({ id: 5, bettor_address: 'GW', side: 'fighter_a', amount: '5000000' }),
+      makeBet({ id: 6, bettor_address: 'GQ', side: 'fighter_a', amount: '3000000' }),
+      makeBet({ id: 7, bettor_address: 'GR', side: 'fighter_b', amount: '2000000' }),
+    ];
+    const findMarketById = jest.fn().mockResolvedValue(makeMarket({
+      pool_a: '28000000',
+      pool_b: '62000000',
+      pool_draw: '10000000',
+      total_pool: '100000000',
+    }));
+    setDbAdapter({
+      findMarkets: jest.fn(),
+      findMarketById,
+      findBetsByAddress: jest.fn(),
+      findBetsByMarket: jest.fn().mockResolvedValue(bets),
+      updateMarketStatus: jest.fn(),
+    });
+
+    const stats = await getMarketStats('mkt-1');
+
+    expect(stats).toEqual({
+      market_id: 'mkt-1',
+      total_bets_count: 7,
+      total_volume_xlm: 10,
+      odds_a: 2800,
+      odds_b: 6200,
+      odds_draw: 1000,
+      top_bettors: [
+        { bettor_address: 'GY', volume_xlm: 5 },
+        { bettor_address: 'GX', volume_xlm: 3 },
+        { bettor_address: 'GZ', volume_xlm: 1 },
+        { bettor_address: 'GW', volume_xlm: 0.5 },
+        { bettor_address: 'GQ', volume_xlm: 0.3 },
+      ],
+      betting_distribution: { A: 28, B: 62, DRAW: 10 },
+    });
+    expect(
+      stats.betting_distribution.A +
+        stats.betting_distribution.B +
+        stats.betting_distribution.DRAW,
+    ).toBe(100);
+    expect(cache.set).toHaveBeenLastCalledWith('market:mkt-1:stats:v2', stats, 60);
+  });
+
+  it('getMarketStats() returns an empty leaderboard and a 100% distribution for an empty market', async () => {
+    const emptyMarket = makeMarket();
+    setDbAdapter({
+      findMarkets: jest.fn(),
+      findMarketById: jest.fn().mockResolvedValue(emptyMarket),
+      findBetsByAddress: jest.fn(),
+      findBetsByMarket: jest.fn().mockResolvedValue([]),
+      updateMarketStatus: jest.fn(),
+    });
+
+    const stats = await getMarketStats('mkt-1');
+
+    expect(stats.total_bets_count).toBe(0);
+    expect(stats.total_volume_xlm).toBe(0);
+    expect(stats.top_bettors).toEqual([]);
+    expect(stats.betting_distribution).toEqual({ A: 33.34, B: 33.33, DRAW: 33.33 });
+    expect(
+      stats.betting_distribution.A +
+        stats.betting_distribution.B +
+        stats.betting_distribution.DRAW,
+    ).toBe(100);
+  });
+
   // 6 ─────────────────────────────────────────────────────────────────────────
   it('getPortfolioByAddress() returns empty portfolio for unknown address', async () => {
     const portfolio = await getPortfolioByAddress('G_UNKNOWN');
@@ -128,6 +229,96 @@ describe('MarketService', () => {
     expect(portfolio.past_bets).toHaveLength(0);
     expect(portfolio.pending_claims).toHaveLength(0);
     expect(portfolio.total_staked_xlm).toBe(0);
+    expect(portfolio.net_xlm).toBe(0);
+  });
+
+  it('getPortfolioByAddress() returns resolved history, claimable wins, XLM totals, and caches for 30 seconds', async () => {
+    const bets = [
+      makeBet({ id: 1, market_id: 'open', amount: '20000000' }),
+      makeBet({ id: 2, market_id: 'locked', amount: '30000000' }),
+      makeBet({ id: 3, market_id: 'resolved-win', amount: '40000000' }),
+      makeBet({ id: 4, market_id: 'resolved-win', amount: '50000000', claimed: true, payout: '80000000' }),
+      makeBet({ id: 5, market_id: 'resolved-loss', amount: '60000000' }),
+      makeBet({ id: 6, market_id: 'cancelled', amount: '70000000' }),
+    ];
+    const markets = [
+      makeMarket({ market_id: 'open', status: 'open' }),
+      makeMarket({ market_id: 'locked', status: 'locked' }),
+      makeMarket({ market_id: 'resolved-win', status: 'resolved', outcome: 'fighter_a' }),
+      makeMarket({ market_id: 'resolved-loss', status: 'resolved', outcome: 'fighter_b' }),
+      makeMarket({ market_id: 'cancelled', status: 'cancelled' }),
+    ];
+    setDbAdapter({
+      findMarkets: jest.fn(),
+      findMarketById: jest.fn().mockImplementation((id: string) =>
+        Promise.resolve(markets.find((market) => market.market_id === id) ?? null),
+      ),
+      findBetsByAddress: jest.fn().mockResolvedValue(bets),
+      findBetsByMarket: jest.fn(),
+      updateMarketStatus: jest.fn(),
+    });
+
+    const portfolio = await getPortfolioByAddress('GAAA');
+
+    expect(portfolio.active_bets.map((bet) => bet.id)).toEqual([1, 2]);
+    expect(portfolio.past_bets.map((bet) => bet.id)).toEqual([3, 4, 5]);
+    expect(portfolio.pending_claims.map((bet) => bet.id)).toEqual([3]);
+    expect(portfolio.total_staked_xlm).toBe(27);
+    expect(portfolio.total_won_xlm).toBe(8);
+    expect(portfolio.total_lost_xlm).toBe(6);
+    expect(portfolio.net_xlm).toBe(2);
+    expect(cache.set).toHaveBeenCalledWith('portfolio:GAAA', portfolio, 30);
+  });
+
+  it('getPortfolioRoiByAddress() calculates ROI, resolved win rate, streak, and caches for 60 seconds', async () => {
+    (pool.query as jest.Mock).mockResolvedValue({
+      rows: [
+        { amount: '10000000', payout: '15000000', claimed: true, side: 'fighter_a', market_status: 'resolved', outcome: 'fighter_a' },
+        { amount: '10000000', payout: null, claimed: false, side: 'fighter_b', market_status: 'resolved', outcome: 'fighter_b' },
+        { amount: '10000000', payout: null, claimed: false, side: 'fighter_a', market_status: 'resolved', outcome: 'fighter_b' },
+        { amount: '10000000', payout: null, claimed: false, side: 'fighter_a', market_status: 'open', outcome: null },
+      ],
+    });
+
+    const result = await getPortfolioRoiByAddress('GAAA');
+
+    expect(result).toEqual({ address: 'GAAA', roi: -62.5, win_rate: 66.67, streak: 2 });
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringMatching(/JOIN markets m ON b\.market_id = m\.market_id[\s\S]*ORDER BY m\.resolved_at DESC/),
+      ['GAAA'],
+    );
+    expect(cache.set).toHaveBeenCalledWith('portfolio:GAAA:roi', result, 60);
+  });
+
+  it('getPortfolioRoiByAddress() returns zero metrics when no stake or resolved bets exist', async () => {
+    (pool.query as jest.Mock).mockResolvedValue({ rows: [] });
+
+    const result = await getPortfolioRoiByAddress('GAAA');
+
+    expect(result).toEqual({ address: 'GAAA', roi: 0, win_rate: 0, streak: 0 });
+  });
+
+  it('getPortfolioRoiByAddress() reports a negative streak for consecutive losses', async () => {
+    (pool.query as jest.Mock).mockResolvedValue({
+      rows: [
+        { amount: '10000000', payout: null, claimed: false, side: 'fighter_a', market_status: 'resolved', outcome: 'fighter_b' },
+        { amount: '10000000', payout: null, claimed: false, side: 'fighter_b', market_status: 'resolved', outcome: 'fighter_a' },
+        { amount: '10000000', payout: '30000000', claimed: true, side: 'draw', market_status: 'resolved', outcome: 'draw' },
+      ],
+    });
+
+    const result = await getPortfolioRoiByAddress('GAAA');
+
+    expect(result).toEqual({ address: 'GAAA', roi: 0, win_rate: 33.33, streak: -2 });
+  });
+
+  it('getPortfolioRoiByAddress() returns a cached result without querying bets', async () => {
+    const cached = { address: 'GAAA', roi: 12.5, win_rate: 50, streak: -1 };
+    (pool.query as jest.Mock).mockClear();
+    (cache.get as jest.Mock).mockResolvedValueOnce(cached);
+
+    await expect(getPortfolioRoiByAddress('GAAA')).resolves.toBe(cached);
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   // 7 ─────────────────────────────────────────────────────────────────────────

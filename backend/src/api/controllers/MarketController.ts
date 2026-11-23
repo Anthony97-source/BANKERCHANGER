@@ -11,6 +11,7 @@ import { ERROR_CODES } from '../../constants/errorCodes';
 import { validateQuery } from '../../middleware/validation.middleware';
 import * as MarketService from '../../services/MarketService';
 import * as OracleService from '../../oracle/OracleService';
+import { logger } from '../../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Issue #18 — listMarkets
@@ -82,6 +83,24 @@ export async function listMarkets(req: Request, res: Response, next: NextFunctio
 }
 
 /**
+ * GET /api/recent-markets
+ *
+ * Returns summary information for the ten most recently created markets.
+ */
+export async function getRecentMarkets(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const markets = await MarketService.getRecentMarkets();
+    res.status(200).json(markets);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/markets/:market_id
  *
  * Returns full market detail including current odds.
@@ -94,53 +113,39 @@ export async function getMarket(
 ): Promise<void> {
   try {
     const { market_id } = req.params;
-    if (!/^\d+$/.test(market_id)) {
-      throw AppError.badRequest(
-        'marketId must be a valid numeric string',
-        ERROR_CODES.INVALID_MARKET_ID
-      );
-    }
     const market = await MarketService.getMarketById(market_id);
     res.status(200).json(market);
   } catch (err) {
     if (err instanceof AppError && err.statusCode === 404) {
-      return next(err);
+      res.status(404).json({ error: 'Market not found' });
+      return;
     }
     next(err);
   }
 }
-
-const marketBetsQuerySchema = z.object({
-  address: z
-    .string()
-    .refine((v) => StrKey.isValidEd25519PublicKey(v), {
-      message: 'Invalid Stellar address format',
-    })
-    .optional(),
-});
 
 /**
  * GET /api/markets/:market_id/bets
  * Query params: address (optional — filter to one bettor)
  *
  * Returns all bets for a market.
- * Responds 404 if market not found, 200 with Bet[].
+ * Returns an empty array when the market has no bets, and responds 400 for an
+ * invalid Stellar address.
  */
-export const getMarketBetsValidation = validateQuery(marketBetsQuerySchema);
-
 export async function getMarketBets(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { market_id } = req.params;
-    const { address } = req.query;
+    const address = req.query.address;
 
     if (address !== undefined) {
       if (typeof address !== 'string' || !StrKey.isValidEd25519PublicKey(address)) {
-        throw AppError.badRequest('Invalid Stellar address format');
+        res.status(400).json({ error: 'Invalid Stellar address format' });
+        return;
       }
     }
 
-    const bets = await MarketService.getBetsByMarket(market_id, address as string | undefined);
-    res.json(bets);
+    const bets = await MarketService.getBetsByMarket(market_id, address);
+    res.status(200).json(bets);
   } catch (err) {
     next(err);
   }
@@ -149,8 +154,8 @@ export async function getMarketBets(req: Request, res: Response, next: NextFunct
 /**
  * GET /api/markets/:market_id/stats
  *
- * Returns aggregate market statistics.
- * Responds 404 if market not found, 200 with MarketStats.
+ * Returns market volume, live odds, top bettors, and betting distribution.
+ * Statistics are cached for 60 seconds.
  */
 export async function getMarketStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -197,6 +202,26 @@ export async function getMarketOdds(
     if (err instanceof AppError && err.statusCode === 404) {
       return next(err);
     }
+    next(err);
+  }
+}
+
+/**
+ * GET /api/markets/:market_id/live-odds
+ *
+ * Returns uncached odds computed from the current market pools.
+ */
+export async function getLiveMarketOdds(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const { market_id } = req.params;
+    const odds = await MarketService.getLiveMarketOdds(market_id);
+    res.status(200).json(odds);
+  } catch (err) {
     next(err);
   }
 }
@@ -325,6 +350,34 @@ export async function getPortfolio(req: Request, res: Response, next: NextFuncti
 }
 
 /**
+ * GET /api/portfolio/:address/roi
+ *
+ * Returns ROI, win rate, and the current resolved-bet streak for a Stellar address.
+ */
+export async function getPortfolioRoi(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const parseResult = portfolioAddressSchema.safeParse({ address: req.params.address });
+    if (!parseResult.success) {
+      const errors = parseResult.error.issues.map((e) => ({
+        field: e.path.join('.'),
+        message: e.message,
+      }));
+      res.status(400).json({ errors });
+      return;
+    }
+
+    const roi = await MarketService.getPortfolioRoiByAddress(parseResult.data.address);
+    res.status(200).json(roi);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/bets/:bettor_address
  *
  * Returns all bets placed by a given Stellar address across all markets.
@@ -359,6 +412,32 @@ export async function getPlatformStats(req: Request, res: Response, next: NextFu
     res.status(200).json(stats);
   } catch (err) {
     next(err);
+  }
+}
+
+/**
+ * GET /api/market-stats
+ *
+ * Returns aggregated platform market statistics. Always responds 200; if the
+ * stats service is unavailable, returns zero-valued statistics.
+ */
+export async function getPlatformMarketStats(
+  _req: Request,
+  res: Response,
+): Promise<void> {
+  try {
+    const stats = await MarketService.getPlatformMarketStats();
+    res.status(200).json(stats);
+  } catch (err) {
+    logger.error({ err }, 'GET /api/market-stats failed');
+    res.status(200).json({
+      total_markets_count: 0,
+      total_volume_xlm: 0,
+      total_bets_count: 0,
+      live_markets_count: 0,
+      unique_bettors_count: 0,
+      platform_fees_collected_xlm: 0,
+    });
   }
 }
 

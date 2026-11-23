@@ -5,15 +5,17 @@
 /* Light mode color palette - WCAG AA compliant (4.5:1+ contrast ratio) */
 @layer base {
   :root {
-    color-scheme: light dark;
+    color-scheme: light;
   }
 
   html:not(.dark) {
+    color-scheme: light;
     --background: 0 0% 100%;
     --foreground: 0 0% 3.6%;
   }
 
   html.dark {
+    color-scheme: dark;
     --background: 0 0% 5.9%;
     --foreground: 0 0% 100%;
   }

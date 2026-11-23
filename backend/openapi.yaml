@@ -235,13 +235,38 @@ components:
 
     MarketStats:
       type: object
+      required:
+        - market_id
+        - total_bets_count
+        - total_volume_xlm
+        - odds_a
+        - odds_b
+        - odds_draw
+        - top_bettors
+        - betting_distribution
       properties:
         market_id: { type: string }
-        total_bets: { type: integer }
-        unique_bettors: { type: integer }
-        largest_bet_xlm: { type: number }
-        average_bet_xlm: { type: number }
-        total_pooled_xlm: { type: number }
+        total_bets_count: { type: integer }
+        total_volume_xlm: { type: number, description: Total bet volume in XLM }
+        odds_a: { type: integer, description: Fighter A pool share in basis points }
+        odds_b: { type: integer, description: Fighter B pool share in basis points }
+        odds_draw: { type: integer, description: Draw pool share in basis points }
+        top_bettors:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            required: [ bettor_address, volume_xlm ]
+            properties:
+              bettor_address: { type: string }
+              volume_xlm: { type: number }
+        betting_distribution:
+          type: object
+          required: [ A, B, DRAW ]
+          properties:
+            A: { type: number, description: Fighter A bet volume percentage }
+            B: { type: number, description: Fighter B bet volume percentage }
+            DRAW: { type: number, description: Draw bet volume percentage }
 
     SimulatePayout:
       type: object
@@ -287,6 +312,7 @@ components:
         total_staked_xlm: { type: number }
         total_won_xlm: { type: number }
         total_lost_xlm: { type: number }
+        net_xlm: { type: number }
         win_rate: { type: number }
 
     Portfolio:
@@ -1540,7 +1566,8 @@ paths:
 
   /api/markets/{market_id}/stats:
     get:
-      summary: Get aggregate stats for a market
+      summary: Get market betting statistics, cached for 60 seconds
+      description: Returns bet counts and volume, live odds in basis points, the five highest-volume bettors, and the pool betting distribution.
       operationId: getMarketStats
       tags: [ Markets ]
       parameters:
@@ -1554,6 +1581,20 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MarketStats' }
+              example:
+                market_id: mkt-1
+                total_bets_count: 7
+                total_volume_xlm: 10
+                odds_a: 2800
+                odds_b: 6200
+                odds_draw: 1000
+                top_bettors:
+                  - bettor_address: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF
+                    volume_xlm: 5
+                betting_distribution:
+                  A: 28
+                  B: 62
+                  DRAW: 10
         '400':
           description: Invalid market ID format
           content:
@@ -1686,34 +1727,52 @@ paths:
   # ---------------------------------------------------------------------------
   /api/bets/{bettor_address}:
     get:
-      summary: Get all bets by a Stellar address
+      summary: Get bets for a Stellar address
+      description: Returns all bets as a Bet array when no pagination parameters are provided; cursor/page pagination remains available when requested.
       operationId: getBetsByAddress
       tags: [ Bets ]
       parameters:
         - name: bettor_address
           in: path
           required: true
+          schema: { type: string, pattern: '^G[A-Z2-7]{55}$' }
+        - name: cursor
+          in: query
+          description: Opaque cursor returned as nextCursor by the previous response.
           schema: { type: string }
         - name: page
           in: query
+          deprecated: true
           schema: { type: integer, default: 1 }
+        - name: offset
+          in: query
+          deprecated: true
+          schema: { type: integer }
         - name: limit
           in: query
-          schema: { type: integer, default: 20 }
+          schema: { type: integer, default: 50, maximum: 100 }
       responses:
         '200':
-          description: Paginated list of bets
+          description: Bet array without pagination parameters, or paginated bets when pagination is requested.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  bets:
-                    type: array
+                oneOf:
+                  - type: array
                     items: { $ref: '#/components/schemas/Bet' }
-                  total: { type: integer }
-                  page: { type: integer }
-                  limit: { type: integer }
+                  - type: object
+                    properties:
+                      bets:
+                        type: array
+                        items: { $ref: '#/components/schemas/Bet' }
+                      total: { type: integer }
+                      page: { type: integer }
+                      limit: { type: integer }
+                      nextCursor: { type: string, nullable: true }
+              examples:
+                allBets:
+                  summary: Unpaginated bet history
+                  value: []
         '400':
           description: Invalid Stellar address
           content:
@@ -1774,10 +1833,52 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Portfolio summary
+          description: Portfolio summary with active bets in open/locked markets and past bets in resolved markets. Amount totals are in XLM; the result is cached for 30 seconds.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Portfolio' }
+        '400':
+          description: Invalid Stellar address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse400' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse429' }
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse500' }
+
+  /api/portfolio/{address}/roi:
+    get:
+      summary: Get portfolio ROI and resolved-bet performance
+      description: Returns ROI and win rate as percentages and the current streak as a signed bet count. Results are cached for 60 seconds.
+      operationId: getPortfolioRoi
+      tags: [ Bets ]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Portfolio ROI, resolved-bet win rate, and current streak
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ address, roi, win_rate, streak ]
+                properties:
+                  address: { type: string }
+                  roi: { type: number, description: ROI percentage }
+                  win_rate: { type: number, description: Percentage of resolved bets on the winning side }
+                  streak:
+                    type: integer
+                    description: "Positive for consecutive wins, negative for consecutive losses"
         '400':
           description: Invalid Stellar address
           content:
@@ -1978,11 +2079,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ matchId, winningOutcome ]
+              required: [ match_id, outcome, reported_at, signature, oracle_address ]
               properties:
-                matchId: { type: string }
-                winningOutcome: { type: integer, enum: [ 0, 1 ] }
-                reportedAt: { type: string, format: date-time }
+                match_id: { type: string }
+                outcome: { type: string, enum: [ fighter_a, fighter_b, draw, no_contest ] }
+                reported_at: { type: string, format: date-time }
+                signature: { type: string, description: Hex-encoded Ed25519 signature }
+                oracle_address: { type: string, description: Stellar public key of the signing oracle }
       responses:
         '200':
           description: Oracle result submitted
@@ -1993,13 +2096,13 @@ paths:
                 properties:
                   tx_hash: { type: string }
                   report_id: { type: integer }
-        '400':
+        '422':
           description: Invalid request body
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse400' }
+              schema: { $ref: '#/components/schemas/ErrorResponse422' }
         '401':
-          description: Missing or invalid oracle API key
+          description: Missing or invalid oracle API key or report signature
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse401' }
@@ -2026,22 +2129,30 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Oracle reports for the fight
+          description: Oracle reports for the fight in descending reported_at order; reports is empty when none exist
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/OracleReport' }
+                type: object
+                required: [ match_id, reports ]
+                properties:
+                  match_id: { type: string }
+                  reports:
+                    type: array
+                    items:
+                      type: object
+                      required: [ oracle_address, outcome, reported_at, tx_hash, accepted ]
+                      properties:
+                        oracle_address: { type: string }
+                        outcome: { type: string }
+                        reported_at: { type: string, format: date-time }
+                        tx_hash: { type: string, nullable: true }
+                        accepted: { type: boolean }
         '400':
           description: Invalid match ID format
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse400' }
-        '404':
-          description: No reports found
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
         '429':
           description: Rate limit exceeded
           content:

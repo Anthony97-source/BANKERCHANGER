@@ -54,11 +54,20 @@ export type OutcomeDB =
 
 export interface MarketStats {
   market_id: string;
-  total_bets: number;
-  unique_bettors: number;
-  largest_bet_xlm: number;
-  average_bet_xlm: number;
-  total_pooled_xlm: number;
+  total_bets_count: number;
+  total_volume_xlm: number;
+  odds_a: number;
+  odds_b: number;
+  odds_draw: number;
+  top_bettors: Array<{
+    bettor_address: string;
+    volume_xlm: number;
+  }>;
+  betting_distribution: {
+    A: number;
+    B: number;
+    DRAW: number;
+  };
 }
 
 export interface PlatformStats {
@@ -66,4 +75,21 @@ export interface PlatformStats {
   activeMarkets: number;
   totalVolume: number;
   totalBets: number;
+}
+
+export interface PlatformMarketStats {
+  total_markets_count: number;
+  total_volume_xlm: number;
+  total_bets_count: number;
+  live_markets_count: number;
+  unique_bettors_count: number;
+  platform_fees_collected_xlm: number;
+}
+
+export interface RecentMarketSummary {
+  fighter_a: string;
+  fighter_b: string;
+  status: MarketStatusDB;
+  total_pool_xlm: number;
+  created_at: Date;
 }
