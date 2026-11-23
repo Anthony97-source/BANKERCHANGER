@@ -41,6 +41,15 @@ const mockPlatformStats = {
   totalBets: 200,
 };
 
+const mockPlatformMarketStats = {
+  total_markets_count: 5,
+  total_volume_xlm: 5000,
+  total_bets_count: 200,
+  live_markets_count: 3,
+  unique_bettors_count: 75,
+  platform_fees_collected_xlm: 25,
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
 });
@@ -131,6 +140,24 @@ describe('GET /api/markets', () => {
   });
 });
 
+describe('GET /api/recent-markets', () => {
+  it('returns recent market summaries', async () => {
+    const recentMarkets = [{
+      fighter_a: 'Fighter A',
+      fighter_b: 'Fighter B',
+      status: 'open',
+      total_pool_xlm: 12.5,
+      created_at: '2026-11-22T12:00:00.000Z',
+    }];
+    (MarketService.getRecentMarkets as jest.Mock).mockResolvedValue(recentMarkets);
+
+    const res = await request(app).get('/api/recent-markets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(recentMarkets);
+  });
+});
+
 describe('GET /api/markets/:id', () => {
   it('returns 200 with market data', async () => {
     (MarketService.getMarketById as jest.Mock).mockResolvedValue(mockMarket);
@@ -175,6 +202,24 @@ describe('GET /api/markets/:id/odds', () => {
   });
 });
 
+describe('GET /api/markets/:id/live-odds', () => {
+  it('returns live odds without allowing response caching', async () => {
+    const odds = {
+      odds_a: 6000,
+      odds_b: 3000,
+      odds_draw: 1000,
+      implied_probabilities: { fighter_a: 60, fighter_b: 30, draw: 10 },
+    };
+    (MarketService.getLiveMarketOdds as jest.Mock).mockResolvedValue(odds);
+
+    const res = await request(app).get('/api/markets/market-1/live-odds');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body).toEqual(odds);
+  });
+});
+
 describe('Admin endpoints require JWT', () => {
   it('returns 401 on POST /api/admin/dispute/:id without token', async () => {
     const res = await request(app).post('/api/admin/dispute/market-1');
@@ -205,5 +250,32 @@ describe('GET /api/stats', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject(mockPlatformStats);
+  });
+});
+
+describe('GET /api/market-stats', () => {
+  it('returns aggregated market statistics', async () => {
+    (MarketService.getPlatformMarketStats as jest.Mock).mockResolvedValue(mockPlatformMarketStats);
+
+    const res = await request(app).get('/api/market-stats');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(mockPlatformMarketStats);
+  });
+
+  it('returns zeroed statistics with 200 if the stats service rejects', async () => {
+    (MarketService.getPlatformMarketStats as jest.Mock).mockRejectedValue(new Error('database unavailable'));
+
+    const res = await request(app).get('/api/market-stats');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      total_markets_count: 0,
+      total_volume_xlm: 0,
+      total_bets_count: 0,
+      live_markets_count: 0,
+      unique_bettors_count: 0,
+      platform_fees_collected_xlm: 0,
+    });
   });
 });

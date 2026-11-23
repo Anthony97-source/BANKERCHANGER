@@ -67,3 +67,20 @@ export interface PlatformStats {
   totalVolume: number;
   totalBets: number;
 }
+
+export interface PlatformMarketStats {
+  total_markets_count: number;
+  total_volume_xlm: number;
+  total_bets_count: number;
+  live_markets_count: number;
+  unique_bettors_count: number;
+  platform_fees_collected_xlm: number;
+}
+
+export interface RecentMarketSummary {
+  fighter_a: string;
+  fighter_b: string;
+  status: MarketStatusDB;
+  total_pool_xlm: number;
+  created_at: Date;
+}
