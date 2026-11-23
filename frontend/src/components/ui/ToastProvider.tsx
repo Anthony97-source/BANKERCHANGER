@@ -42,7 +42,6 @@ const TYPE_LABELS: Record<ToastType, string> = {
   error: 'Error',
   info: 'Information',
 };
-=======
 
 export function ToastProvider({ children }: { children: React.ReactNode }): JSX.Element {
   const [toasts, setToasts] = useState<Toast[]>([]);
