@@ -88,7 +88,8 @@ router.get('/:bettor_address/stats', getBettorStats);
  * @swagger
  * /api/bets/{bettor_address}:
  *   get:
- *     summary: Get paginated bets for an address
+ *     summary: Get bets for a Stellar address
+ *     description: Returns all bets as a Bet array when no pagination parameters are provided; cursor/page pagination remains available when requested.
  *     tags: [Bets]
  *     parameters:
  *       - in: path
@@ -96,25 +97,27 @@ router.get('/:bettor_address/stats', getBettorStats);
  *         required: true
  *         schema:
  *           type: string
+ *           pattern: '^G[A-Z2-7]{55}$'
  *       - in: query
  *         name: cursor
  *         description: Opaque cursor returned as nextCursor by the previous response.
- *         schema:
- *           type: string
+ *         schema: { type: string }
  *       - in: query
  *         name: page
  *         deprecated: true
- *         schema:
- *           type: integer
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: offset
+ *         deprecated: true
+ *         schema: { type: integer }
  *       - in: query
  *         name: limit
- *         schema:
- *           type: integer
- *           default: 50
- *           maximum: 100
+ *         schema: { type: integer, default: 50, maximum: 100 }
  *     responses:
  *       200:
- *         description: Keyset-paginated bets with a nextCursor, or deprecated page/offset pagination.
+ *         description: Bet array without pagination parameters, or a paginated result when pagination is requested.
+ *       400:
+ *         description: Invalid Stellar address
  */
 router.get('/:bettor_address', getBetsByAddress);
 

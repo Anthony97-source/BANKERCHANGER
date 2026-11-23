@@ -49,7 +49,7 @@ Gets a value from cache, or computes and caches it if missing.
 
 ```typescript
 const stats = await cache.getOrSet(
-  'market:abc123:stats',
+  'market:abc123:stats:v2',
   60,
   async () => await computeMarketStats('abc123')
 );
@@ -59,7 +59,7 @@ const stats = await cache.getOrSet(
 
 ### Market Keys
 - `market:{id}` - Individual market data
-- `market:{id}:stats` - Market statistics
+- `market:{id}:stats:v2` - Market betting statistics
 - `markets:*` - Market list queries (with filters)
 
 ### Leaderboard Keys
@@ -108,7 +108,7 @@ await cache.delPattern('leaderboard:global:*');
 export async function invalidateMarketCache(market_id: string): Promise<void> {
   await cache.del(`market:${market_id}`);
   await cache.delPattern(`markets:*`);
-  await cache.del(`market:${market_id}:stats`);
+  await cache.del(`market:${market_id}:stats:v2`);
 }
 ```
 

@@ -116,6 +116,11 @@ describe('MarketService', () => {
     await expect(getMarketById('unknown')).rejects.toBeInstanceOf(AppError);
   });
 
+  it('getMarketById() includes live odds from getMarketOdds()', async () => {
+    const market = await getMarketById('mkt-1');
+    expect(market.odds).toEqual({ odds_a: 3333, odds_b: 3333, odds_draw: 3333 });
+  });
+
   // 4 ─────────────────────────────────────────────────────────────────────────
   it('getMarketOdds() returns equal implied probabilities (33.33%) for empty pools', async () => {
     const odds = await getMarketOdds('mkt-1'); // pool totals are all '0'
@@ -142,6 +147,79 @@ describe('MarketService', () => {
 
     const odds = await getMarketOdds('mkt-3');
     expect(odds).toEqual({ odds_a: 6000, odds_b: 3000, odds_draw: 1000 });
+  });
+
+  it('getMarketStats() reports volume, live odds, top five bettors, and a normalized distribution', async () => {
+    const bets = [
+      makeBet({ id: 1, bettor_address: 'GX', side: 'fighter_a', amount: '20000000' }),
+      makeBet({ id: 2, bettor_address: 'GX', side: 'fighter_b', amount: '10000000' }),
+      makeBet({ id: 3, bettor_address: 'GY', side: 'fighter_b', amount: '50000000' }),
+      makeBet({ id: 4, bettor_address: 'GZ', side: 'draw', amount: '10000000' }),
+      makeBet({ id: 5, bettor_address: 'GW', side: 'fighter_a', amount: '5000000' }),
+      makeBet({ id: 6, bettor_address: 'GQ', side: 'fighter_a', amount: '3000000' }),
+      makeBet({ id: 7, bettor_address: 'GR', side: 'fighter_b', amount: '2000000' }),
+    ];
+    const findMarketById = jest.fn().mockResolvedValue(makeMarket({
+      pool_a: '28000000',
+      pool_b: '62000000',
+      pool_draw: '10000000',
+      total_pool: '100000000',
+    }));
+    setDbAdapter({
+      findMarkets: jest.fn(),
+      findMarketById,
+      findBetsByAddress: jest.fn(),
+      findBetsByMarket: jest.fn().mockResolvedValue(bets),
+      updateMarketStatus: jest.fn(),
+    });
+
+    const stats = await getMarketStats('mkt-1');
+
+    expect(stats).toEqual({
+      market_id: 'mkt-1',
+      total_bets_count: 7,
+      total_volume_xlm: 10,
+      odds_a: 2800,
+      odds_b: 6200,
+      odds_draw: 1000,
+      top_bettors: [
+        { bettor_address: 'GY', volume_xlm: 5 },
+        { bettor_address: 'GX', volume_xlm: 3 },
+        { bettor_address: 'GZ', volume_xlm: 1 },
+        { bettor_address: 'GW', volume_xlm: 0.5 },
+        { bettor_address: 'GQ', volume_xlm: 0.3 },
+      ],
+      betting_distribution: { A: 28, B: 62, DRAW: 10 },
+    });
+    expect(
+      stats.betting_distribution.A +
+        stats.betting_distribution.B +
+        stats.betting_distribution.DRAW,
+    ).toBe(100);
+    expect(cache.set).toHaveBeenLastCalledWith('market:mkt-1:stats:v2', stats, 60);
+  });
+
+  it('getMarketStats() returns an empty leaderboard and a 100% distribution for an empty market', async () => {
+    const emptyMarket = makeMarket();
+    setDbAdapter({
+      findMarkets: jest.fn(),
+      findMarketById: jest.fn().mockResolvedValue(emptyMarket),
+      findBetsByAddress: jest.fn(),
+      findBetsByMarket: jest.fn().mockResolvedValue([]),
+      updateMarketStatus: jest.fn(),
+    });
+
+    const stats = await getMarketStats('mkt-1');
+
+    expect(stats.total_bets_count).toBe(0);
+    expect(stats.total_volume_xlm).toBe(0);
+    expect(stats.top_bettors).toEqual([]);
+    expect(stats.betting_distribution).toEqual({ A: 33.34, B: 33.33, DRAW: 33.33 });
+    expect(
+      stats.betting_distribution.A +
+        stats.betting_distribution.B +
+        stats.betting_distribution.DRAW,
+    ).toBe(100);
   });
 
   // 6 ─────────────────────────────────────────────────────────────────────────

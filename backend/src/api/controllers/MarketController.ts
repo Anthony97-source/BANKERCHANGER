@@ -113,53 +113,39 @@ export async function getMarket(
 ): Promise<void> {
   try {
     const { market_id } = req.params;
-    if (!/^\d+$/.test(market_id)) {
-      throw AppError.badRequest(
-        'marketId must be a valid numeric string',
-        ERROR_CODES.INVALID_MARKET_ID
-      );
-    }
     const market = await MarketService.getMarketById(market_id);
     res.status(200).json(market);
   } catch (err) {
     if (err instanceof AppError && err.statusCode === 404) {
-      return next(err);
+      res.status(404).json({ error: 'Market not found' });
+      return;
     }
     next(err);
   }
 }
-
-const marketBetsQuerySchema = z.object({
-  address: z
-    .string()
-    .refine((v) => StrKey.isValidEd25519PublicKey(v), {
-      message: 'Invalid Stellar address format',
-    })
-    .optional(),
-});
 
 /**
  * GET /api/markets/:market_id/bets
  * Query params: address (optional — filter to one bettor)
  *
  * Returns all bets for a market.
- * Responds 404 if market not found, 200 with Bet[].
+ * Returns an empty array when the market has no bets, and responds 400 for an
+ * invalid Stellar address.
  */
-export const getMarketBetsValidation = validateQuery(marketBetsQuerySchema);
-
 export async function getMarketBets(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { market_id } = req.params;
-    const { address } = req.query;
+    const address = req.query.address;
 
     if (address !== undefined) {
       if (typeof address !== 'string' || !StrKey.isValidEd25519PublicKey(address)) {
-        throw AppError.badRequest('Invalid Stellar address format');
+        res.status(400).json({ error: 'Invalid Stellar address format' });
+        return;
       }
     }
 
-    const bets = await MarketService.getBetsByMarket(market_id, address as string | undefined);
-    res.json(bets);
+    const bets = await MarketService.getBetsByMarket(market_id, address);
+    res.status(200).json(bets);
   } catch (err) {
     next(err);
   }
@@ -168,8 +154,8 @@ export async function getMarketBets(req: Request, res: Response, next: NextFunct
 /**
  * GET /api/markets/:market_id/stats
  *
- * Returns aggregate market statistics.
- * Responds 404 if market not found, 200 with MarketStats.
+ * Returns market volume, live odds, top bettors, and betting distribution.
+ * Statistics are cached for 60 seconds.
  */
 export async function getMarketStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {

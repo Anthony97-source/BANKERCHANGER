@@ -452,7 +452,7 @@ export async function getRecentMarkets(): Promise<RecentMarketSummary[]> {
 export async function invalidateMarketCache(market_id: string): Promise<void> {
   await cache.del(`market:${market_id}`);
   await cache.delPattern(`markets:*`);
-  await cache.del(`market:${market_id}:stats`);
+  await cache.del(`market:${market_id}:stats:v2`);
 }
 
 /**
@@ -473,10 +473,10 @@ export async function getMarketById(market_id: string): Promise<MarketWithOdds> 
   const market = await db().findMarketById(market_id);
   if (!market) throw AppError.notFound(`Market not found: ${market_id}`);
 
-  const odds = await calculateOdds(market_id);
+  const odds = await getMarketOdds(market_id);
   const result: MarketWithOdds = {
     ...market,
-    odds: { fighterA: odds.fighterA, fighterB: odds.fighterB, draw: odds.draw },
+    odds,
   };
 
   await cache.set(cacheKey, result, 10);
@@ -802,26 +802,60 @@ export async function getBetsByMarket(
  * Results cached in Redis for 60 seconds.
  */
 export async function getMarketStats(market_id: string): Promise<MarketStats> {
-  const cacheKey = `market:${market_id}:stats`;
+  const cacheKey = `market:${market_id}:stats:v2`;
   const cached = await cache.get<MarketStats>(cacheKey);
   if (cached) return cached;
 
-  const bets = await db().findBetsByMarket(market_id);
+  const [bets, odds] = await Promise.all([
+    db().findBetsByMarket(market_id),
+    getMarketOdds(market_id),
+  ]);
+  const totalStroops = bets.reduce((sum, bet) => sum + BigInt(bet.amount), 0n);
+  const bettorVolumes = new Map<string, bigint>();
+  for (const bet of bets) {
+    bettorVolumes.set(
+      bet.bettor_address,
+      (bettorVolumes.get(bet.bettor_address) ?? 0n) + BigInt(bet.amount),
+    );
+  }
 
-  const total_bets = bets.length;
-  const unique_bettors = new Set(bets.map(b => b.bettor_address)).size;
-  const amounts_xlm = bets.map(b => Number(b.amount) / 10_000_000);
-  const largest_bet_xlm = amounts_xlm.length > 0 ? Math.max(...amounts_xlm) : 0;
-  const average_bet_xlm = amounts_xlm.length > 0 ? amounts_xlm.reduce((s, a) => s + a, 0) / amounts_xlm.length : 0;
-  const total_pooled_xlm = amounts_xlm.reduce((s, a) => s + a, 0);
+  const top_bettors = [...bettorVolumes.entries()]
+    .sort(([addressA, volumeA], [addressB, volumeB]) =>
+      volumeA === volumeB ? addressA.localeCompare(addressB) : volumeA > volumeB ? -1 : 1,
+    )
+    .slice(0, 5)
+    .map(([bettor_address, volume]) => ({
+      bettor_address,
+      volume_xlm: Number(volume) / 10_000_000,
+    }));
+
+  const oddsShares = [odds.odds_a, odds.odds_b, odds.odds_draw];
+  const oddsTotal = oddsShares.reduce((sum, share) => sum + share, 0);
+  const normalizedShares = oddsTotal > 0 ? oddsShares : [1, 1, 1];
+  const shareTotal = normalizedShares.reduce((sum, share) => sum + share, 0);
+  const scaledShares = normalizedShares.map((share) => (share * 10_000) / shareTotal);
+  const distributionHundredths = scaledShares.map(Math.floor);
+  let remainder = 10_000 - distributionHundredths.reduce((sum, share) => sum + share, 0);
+  const remainderOrder = scaledShares
+    .map((share, index) => ({ index, fraction: share - distributionHundredths[index] }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let index = 0; remainder > 0; index += 1, remainder -= 1) {
+    distributionHundredths[remainderOrder[index % remainderOrder.length].index] += 1;
+  }
 
   const stats: MarketStats = {
     market_id,
-    total_bets,
-    unique_bettors,
-    largest_bet_xlm,
-    average_bet_xlm,
-    total_pooled_xlm,
+    total_bets_count: bets.length,
+    total_volume_xlm: Number(totalStroops) / 10_000_000,
+    odds_a: odds.odds_a,
+    odds_b: odds.odds_b,
+    odds_draw: odds.odds_draw,
+    top_bettors,
+    betting_distribution: {
+      A: distributionHundredths[0] / 100,
+      B: distributionHundredths[1] / 100,
+      DRAW: distributionHundredths[2] / 100,
+    },
   };
 
   await cache.set(cacheKey, stats, 60);

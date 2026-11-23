@@ -28,10 +28,13 @@ const mockBet = {
 
 const mockStats = {
   market_id: 'market-1',
-  total_bets: 10,
-  total_volume: '1000',
-  fighter_a_volume: '600',
-  fighter_b_volume: '400',
+  total_bets_count: 10,
+  total_volume_xlm: 1000,
+  odds_a: 6000,
+  odds_b: 3000,
+  odds_draw: 1000,
+  top_bettors: [{ bettor_address: mockBet.bettor_address, volume_xlm: 100 }],
+  betting_distribution: { A: 60, B: 30, DRAW: 10 },
 };
 
 const mockPlatformStats = {
@@ -160,12 +163,20 @@ describe('GET /api/recent-markets', () => {
 
 describe('GET /api/markets/:id', () => {
   it('returns 200 with market data', async () => {
-    (MarketService.getMarketById as jest.Mock).mockResolvedValue(mockMarket);
+    const marketWithOdds = {
+      ...mockMarket,
+      odds: { odds_a: 5000, odds_b: 3000, odds_draw: 2000 },
+    };
+    (MarketService.getMarketById as jest.Mock).mockResolvedValue(marketWithOdds);
 
     const res = await request(app).get('/api/markets/market-1');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ market_id: 'market-1' });
+    expect(res.body).toMatchObject({
+      market_id: 'market-1',
+      odds: { odds_a: 5000, odds_b: 3000, odds_draw: 2000 },
+    });
+    expect(MarketService.getMarketById).toHaveBeenCalledWith('market-1');
   });
 
   it('returns 404 when market not found', async () => {
@@ -177,6 +188,83 @@ describe('GET /api/markets/:id', () => {
     const res = await request(app).get('/api/markets/nonexistent');
 
     expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Market not found' });
+  });
+});
+
+describe('GET /api/markets/:id/bets', () => {
+  it('returns all market bets when no address is provided', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([mockBet]);
+
+    const res = await request(app).get('/api/markets/market-1/bets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([mockBet]);
+    expect(MarketService.getBetsByMarket).toHaveBeenCalledWith('market-1', undefined);
+  });
+
+  it('filters bets by a valid Stellar address', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([mockBet]);
+
+    const res = await request(app).get(
+      `/api/markets/market-1/bets?address=${mockBet.bettor_address}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([mockBet]);
+    expect(MarketService.getBetsByMarket).toHaveBeenCalledWith(
+      'market-1',
+      mockBet.bettor_address,
+    );
+  });
+
+  it('returns 400 for an invalid Stellar address', async () => {
+    const res = await request(app).get('/api/markets/market-1/bets?address=invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Invalid Stellar address format' });
+    expect(MarketService.getBetsByMarket).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array when the market has no bets', async () => {
+    (MarketService.getBetsByMarket as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app).get('/api/markets/market-1/bets');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+describe('GET /api/bets/:bettor_address', () => {
+  const bettorAddress = mockBet.bettor_address;
+
+  it('returns all bets as an array sorted newest first', async () => {
+    const olderBet = { ...mockBet, bet_id: 'older', placed_at: '2025-01-01T00:00:00.000Z' };
+    const newerBet = { ...mockBet, bet_id: 'newer', placed_at: '2026-01-01T00:00:00.000Z' };
+    (MarketService.getBetsByAddress as jest.Mock).mockResolvedValue([olderBet, newerBet]);
+
+    const res = await request(app).get(`/api/bets/${bettorAddress}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([newerBet, olderBet]);
+    expect(MarketService.getBetsByAddress).toHaveBeenCalledWith(bettorAddress);
+  });
+
+  it('returns 400 for an invalid Stellar address', async () => {
+    const res = await request(app).get('/api/bets/invalid-address');
+
+    expect(res.status).toBe(400);
+    expect(MarketService.getBetsByAddress).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array when the address has no bets', async () => {
+    (MarketService.getBetsByAddress as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app).get(`/api/bets/${bettorAddress}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
   });
 });
 
@@ -187,7 +275,7 @@ describe('GET /api/markets/:id/odds', () => {
     const res = await request(app).get('/api/markets/market-1/stats');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ market_id: 'market-1' });
+    expect(res.body).toEqual(mockStats);
   });
 
   it('returns 404 when market not found', async () => {
